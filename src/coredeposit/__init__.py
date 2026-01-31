@@ -11,6 +11,12 @@ from .estimators import (  # noqa: E402
     CoreDepositPriors,
     default_priors,
 )
+from .metrics import (  # noqa: E402
+    compute_median_survival,
+    compute_quantile_survival,
+    weibull_median_survival,
+    weibull_quantile_survival,
+)
 
 __all__ = [
     "CoreDepositData",
@@ -21,4 +27,8 @@ __all__ = [
     "NoCovariateMCMCEstimator",
     "CoreDepositPriors",
     "default_priors",
+    "compute_median_survival",
+    "compute_quantile_survival",
+    "weibull_median_survival",
+    "weibull_quantile_survival",
 ]
