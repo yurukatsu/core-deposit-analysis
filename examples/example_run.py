@@ -32,6 +32,11 @@ nls = NLSEstimator()
 res_nls = nls.fit(data_nocov)
 print(res_nls.params)
 
+# Prediction
+V_pred_nls = nls.predict(data_nocov, res_nls)
+print(f"\nPrediction (first 5): {V_pred_nls[:5]}")
+print(f"Observed   (first 5): {V[:5]}")
+
 
 print("\n====================================")
 print("NLS (grid search for m)")
@@ -63,6 +68,12 @@ mcmc_nocov = MCMCEstimator(
     num_chains=2,
 )
 res_mcmc_nocov = mcmc_nocov.fit(data_nocov)
+
+# Prediction with uncertainty
+pred = mcmc_nocov.predict(data_nocov, res_mcmc_nocov, uncertainty=True)
+print(f"\nPrediction mean (first 5): {pred['mean'][:5]}")
+print(f"95% CI lower   (first 5): {pred['lower'][:5]}")
+print(f"95% CI upper   (first 5): {pred['upper'][:5]}")
 
 
 print("\n====================================")

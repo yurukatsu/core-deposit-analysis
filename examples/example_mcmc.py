@@ -2,8 +2,9 @@
 
 This script demonstrates:
 1. Running MCMC estimation with the core deposit model
-2. Visualizing results with ArviZ (trace plots, posterior distributions, etc.)
-3. Computing summary statistics and credible intervals
+2. Predicting deposit balances with uncertainty quantification
+3. Visualizing results with ArviZ (trace plots, posterior distributions, etc.)
+4. Computing summary statistics and credible intervals
 """
 
 from pathlib import Path
@@ -14,7 +15,7 @@ import pandas as pd
 import arviz as az
 import matplotlib.pyplot as plt
 
-from coredeposit import CoreDepositData, MCMCEstimator
+from coredeposit import CoreDepositData, MCMCEstimator, compute_median_survival
 
 # Create outputs directory
 Path("outputs").mkdir(exist_ok=True)
@@ -50,6 +51,17 @@ estimator = MCMCEstimator(
 )
 
 result = estimator.fit(data)
+
+# -------------------------------------------------
+# Prediction with uncertainty
+# -------------------------------------------------
+print("\n" + "=" * 50)
+print("Prediction")
+print("=" * 50)
+
+pred = estimator.predict(data, result, uncertainty=True)
+print(f"Prediction shape: {pred['mean'].shape}")
+print(f"Samples shape: {pred['samples'].shape}")
 
 # -------------------------------------------------
 # Convert to ArviZ InferenceData
@@ -142,6 +154,27 @@ plt.tight_layout()
 plt.savefig("outputs/mcmc_forest.png", dpi=150)
 print("  Saved: outputs/mcmc_forest.png")
 
+# 5. Prediction vs Observed with credible intervals
+fig, ax = plt.subplots(figsize=(12, 5))
+t = np.arange(len(V))
+
+# Get 90% and 50% credible intervals for visualization
+pred_90 = estimator.predict(data, result, uncertainty=True, ci_prob=0.90)
+pred_50 = estimator.predict(data, result, uncertainty=True, ci_prob=0.50)
+
+ax.fill_between(t, pred["lower"], pred["upper"], alpha=0.2, label="95% CI")
+ax.fill_between(t, pred_90["lower"], pred_90["upper"], alpha=0.3, label="90% CI")
+ax.fill_between(t, pred_50["lower"], pred_50["upper"], alpha=0.4, label="50% CI")
+ax.plot(t, pred["mean"], label="Predicted (posterior mean)", linewidth=2)
+ax.plot(t, V, "o", markersize=3, alpha=0.7, label="Observed")
+ax.set_xlabel("Time (months)")
+ax.set_ylabel("Deposit Balance")
+ax.set_title("Model Fit with Credible Intervals")
+ax.legend()
+plt.tight_layout()
+plt.savefig("outputs/mcmc_prediction.png", dpi=150)
+print("  Saved: outputs/mcmc_prediction.png")
+
 plt.close("all")
 
 # -------------------------------------------------
@@ -157,5 +190,17 @@ for var in ["lambda", "gamma", "w1", "h", "m"]:
     lo, hi = np.percentile(vals, [2.5, 97.5])
     mean = vals.mean()
     print(f"  {var}: {mean:.4f} [{lo:.4f}, {hi:.4f}]")
+
+# -------------------------------------------------
+# Median survival time (half-life)
+# -------------------------------------------------
+print("\n" + "=" * 50)
+print("Median Survival Time (Sticky Deposits)")
+print("=" * 50)
+
+t50 = compute_median_survival(result, ci_prob=0.95)
+print(f"  Mean:   {t50['mean']:.1f} months")
+print(f"  Median: {t50['median']:.1f} months")
+print(f"  95% CI: [{t50['lower']:.1f}, {t50['upper']:.1f}] months")
 
 print("\nDone!")
