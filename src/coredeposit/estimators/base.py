@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..types import CoreDepositData, EstimationResult
+from ..types import CoreDepositData, EstimationResult, NDArray
 
 
 class Estimator(ABC):
@@ -50,5 +50,44 @@ class Estimator(ABC):
         -------
         EstimationResult
             Estimated parameters and diagnostics.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def predict(
+        self,
+        data: CoreDepositData,
+        result: EstimationResult,
+        *,
+        uncertainty: bool = False,
+        ci_prob: float = 0.95,
+    ) -> NDArray | dict[str, NDArray]:
+        """
+        Predict deposit balances using estimated parameters.
+
+        Parameters
+        ----------
+        data : CoreDepositData
+            Input data for prediction. Can be the same data used for fitting
+            (in-sample prediction) or new data with different inflows.
+        result : EstimationResult
+            Estimation result from a previous call to `fit()`.
+        uncertainty : bool, optional
+            If True, return uncertainty estimates (MCMC only).
+            Default is False.
+        ci_prob : float, optional
+            Credible interval probability (MCMC only). Default is 0.95 (95% CI).
+            For example, 0.90 gives 90% CI (5th to 95th percentile).
+
+        Returns
+        -------
+        NDArray or dict[str, NDArray]
+            If uncertainty=False: predicted balances as array of shape (T+1,).
+            If uncertainty=True (MCMC only): dict containing:
+
+            - 'mean': posterior mean prediction, shape (T+1,)
+            - 'samples': all posterior samples, shape (n_samples, T+1)
+            - 'lower': lower bound of credible interval, shape (T+1,)
+            - 'upper': upper bound of credible interval, shape (T+1,)
         """
         raise NotImplementedError

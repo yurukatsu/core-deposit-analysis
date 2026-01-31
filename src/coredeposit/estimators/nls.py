@@ -6,10 +6,12 @@ core deposit model parameters using scipy's least_squares optimizer.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from scipy.optimize import least_squares
 
-from ..types import CoreDepositData, EstimationResult
+from ..types import CoreDepositData, EstimationResult, NDArray
 from ..model.balance import V_model
 from .base import Estimator
 
@@ -244,3 +246,78 @@ class NLSEstimator(Estimator):
                 "m_fixed": m_fixed,
             },
         )
+
+    def predict(
+        self,
+        data: CoreDepositData,
+        result: EstimationResult,
+        *,
+        uncertainty: bool = False,
+        ci_prob: float = 0.95,
+    ) -> NDArray | dict[str, NDArray]:
+        """Predict deposit balances using NLS point estimates.
+
+        Parameters
+        ----------
+        data : CoreDepositData
+            Input data for prediction containing inflows and initial balance.
+        result : EstimationResult
+            Result from a previous call to `fit()`.
+        uncertainty : bool, optional
+            If True, a warning is issued since NLS only provides point
+            estimates. Default is False.
+        ci_prob : float, optional
+            Ignored for NLS (no uncertainty estimation).
+
+        Returns
+        -------
+        NDArray
+            Predicted deposit balances of shape (T+1,).
+
+        Examples
+        --------
+        >>> estimator = NLSEstimator()
+        >>> result = estimator.fit(data)
+        >>> V_pred = estimator.predict(data, result)
+        """
+        _ = ci_prob  # Unused in NLS
+        if uncertainty:
+            warnings.warn(
+                "NLSEstimator does not support uncertainty estimation. "
+                "Use MCMCEstimator for posterior predictive distributions.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        params = result.params
+        V0 = float(data.V0)
+        inflow = np.asarray(data.inflow, dtype=float)
+        T = inflow.shape[0] - 1
+
+        z = data.z
+        if z is not None:
+            z = np.asarray(z, dtype=float)
+            if z.ndim == 1:
+                z = z.reshape(-1, 1)
+            beta = params.get("beta")
+            if beta is not None:
+                weight = np.exp(z @ beta)
+            else:
+                weight = np.ones(T + 1)
+        else:
+            weight = np.ones(T + 1)
+
+        Vhat = np.array(
+            V_model(
+                lam=params["lambda"],
+                gam=params["gamma"],
+                w1=params["w1"],
+                h=params["h"],
+                m=params["m"],
+                V0=V0,
+                inflow=inflow,
+                weight=weight,
+            )
+        )
+
+        return Vhat

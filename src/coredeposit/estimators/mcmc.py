@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 from numpyro.infer import MCMC, NUTS
 
-from ..types import CoreDepositData, EstimationResult
+from ..types import CoreDepositData, EstimationResult, NDArray
 from ..normalize import normalize
 from ..model.balance import V_model
 from .base import Estimator
@@ -273,6 +274,121 @@ class MCMCEstimator(Estimator):
             params=mcmc.get_samples(),
             diagnostics={"scale": float(scale), "mcmc": mcmc},
         )
+
+    def predict(
+        self,
+        data: CoreDepositData,
+        result: EstimationResult,
+        *,
+        uncertainty: bool = False,
+        ci_prob: float = 0.95,
+    ) -> NDArray | dict[str, NDArray]:
+        """Predict deposit balances using posterior samples.
+
+        Generates predictions using the posterior samples from MCMC estimation.
+        By default returns the posterior mean prediction. With uncertainty=True,
+        returns the full posterior predictive distribution.
+
+        Parameters
+        ----------
+        data : CoreDepositData
+            Input data for prediction containing inflows and initial balance.
+            Can be the same data used for fitting or new data.
+        result : EstimationResult
+            Result from a previous call to `fit()`.
+        uncertainty : bool, optional
+            If True, return full posterior predictive distribution including
+            credible intervals. Default is False.
+        ci_prob : float, optional
+            Credible interval probability. Default is 0.95 (95% CI).
+            For example, 0.90 gives 90% CI, 0.50 gives 50% CI.
+
+        Returns
+        -------
+        NDArray or dict[str, NDArray]
+            If uncertainty=False:
+                Predicted balances using posterior mean, shape (T+1,).
+
+            If uncertainty=True:
+                Dictionary containing:
+
+                - 'mean': posterior mean prediction, shape (T+1,)
+                - 'samples': all posterior predictions, shape (n_samples, T+1)
+                - 'lower': lower bound of credible interval, shape (T+1,)
+                - 'upper': upper bound of credible interval, shape (T+1,)
+
+        Examples
+        --------
+        >>> estimator = MCMCEstimator()
+        >>> result = estimator.fit(data)
+        >>> # Point prediction (posterior mean)
+        >>> V_pred = estimator.predict(data, result)
+        >>> # With 95% credible interval (default)
+        >>> pred = estimator.predict(data, result, uncertainty=True)
+        >>> # With 90% credible interval
+        >>> pred = estimator.predict(data, result, uncertainty=True, ci_prob=0.90)
+        """
+        params = result.params
+        V0 = float(data.V0)
+        inflow = np.asarray(data.inflow, dtype=float)
+        T = inflow.shape[0] - 1
+
+        z = data.z
+        has_covariate = z is not None
+        if has_covariate:
+            z = np.asarray(z, dtype=float)
+            if z.ndim == 1:
+                z = z.reshape(-1, 1)
+
+        # Get sample arrays
+        lam_samples = np.asarray(params["lambda"])
+        gam_samples = np.asarray(params["gamma"])
+        w1_samples = np.asarray(params["w1"])
+        h_samples = np.asarray(params["h"])
+        m_samples = np.asarray(params["m"])
+        n_samples = len(lam_samples)
+
+        if has_covariate and "beta" in params:
+            beta_samples = np.asarray(params["beta"])
+        else:
+            beta_samples = None
+
+        # Compute predictions for each posterior sample
+        V_samples = np.zeros((n_samples, T + 1))
+
+        for i in range(n_samples):
+            if beta_samples is not None:
+                weight = np.exp(z @ beta_samples[i])
+            else:
+                weight = np.ones(T + 1)
+
+            V_samples[i] = np.array(
+                V_model(
+                    lam=lam_samples[i],
+                    gam=gam_samples[i],
+                    w1=w1_samples[i],
+                    h=h_samples[i],
+                    m=m_samples[i],
+                    V0=V0,
+                    inflow=inflow,
+                    weight=weight,
+                )
+            )
+
+        mean = V_samples.mean(axis=0)
+
+        if uncertainty:
+            alpha = (1.0 - ci_prob) / 2.0
+            lower_pct = alpha * 100
+            upper_pct = (1.0 - alpha) * 100
+            return {
+                "mean": mean,
+                "samples": V_samples,
+                "lower": np.percentile(V_samples, lower_pct, axis=0),
+                "upper": np.percentile(V_samples, upper_pct, axis=0),
+            }
+        else:
+            return mean
 
 
 # Backward compatibility alias
