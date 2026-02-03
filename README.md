@@ -11,7 +11,9 @@ This library implements a core deposit model that decomposes bank deposits into 
 
 The model supports both frequentist (NLS) and Bayesian (MCMC) estimation approaches.
 
-For detailed mathematical specification, see [docs/model.md](docs/model.md).
+For detailed documentation:
+- [docs/model.md](docs/model.md) - Mathematical model specification
+- [docs/estimation.md](docs/estimation.md) - Estimation methods (NLS and MCMC)
 
 ## Installation
 
@@ -22,6 +24,9 @@ cd core-deposit-analysis
 
 # Install with uv (recommended)
 uv sync
+
+# For GPU support (CUDA 12)
+uv sync --extra cuda
 
 # Or install with pip
 pip install -e .
@@ -40,8 +45,8 @@ df = pd.read_csv("data/your_data.csv")
 # Prepare data
 data = CoreDepositData(
     V_obs=df["volume"].values,      # Observed deposit balances
-    inflow=df["input"].values,       # Deposit inflows
-    V0=df["volume"].values[0],       # Initial balance
+    inflow=df["inflow"].values,     # Deposit inflows
+    V0=df["volume"].values[0],      # Initial balance
 )
 
 # Option 1: Non-linear Least Squares
@@ -70,25 +75,84 @@ The model estimates the following parameters:
 | `h` | First-month exit rate for transactional deposits (0-1) |
 | `m` | Average age of initial balance in months |
 | `beta` | Covariate coefficients (if covariates provided) |
+| `sigma` | Observation noise std (MCMC only) |
+| `nu` | Student-t degrees of freedom (MCMC with studentt likelihood) |
+| `rho` | AR(1) autocorrelation coefficient (MCMC with ar_errors=True) |
 
 ## Examples
 
-See the [examples/](examples/) directory for detailed usage examples:
-
-- [example_run.py](examples/example_run.py) - Basic NLS and MCMC estimation
-- [example_mcmc.py](examples/example_mcmc.py) - MCMC with ArviZ visualization
+See [examples/run_mcmc.py](examples/run_mcmc.py) for a complete example with:
+- Device configuration (CPU/GPU)
+- NLS initialization for MCMC
+- AR(1) autocorrelated errors
+- ArviZ visualization and diagnostics
 
 ### Running Examples
 
 ```bash
-cd examples
-uv run python example_run.py
-uv run python example_mcmc.py
+uv run python examples/run_mcmc.py
 ```
 
-## Using Covariates
+## Advanced Features
 
-You can include time-varying covariates that affect the hazard rate:
+### Device Configuration
+
+Configure JAX/NumPyro device settings for parallel MCMC chains:
+
+```python
+import numpyro
+
+# For CPU with multiple devices (must be called before any JAX operations)
+numpyro.set_host_device_count(2)
+
+# Run MCMC with parallel chains
+mcmc = MCMCEstimator(num_chains=2)
+result = mcmc.fit(data)
+```
+
+### NLS Initialization for MCMC
+
+Improve MCMC convergence by initializing from NLS estimates:
+
+```python
+from coredeposit import NLSEstimator, MCMCEstimator
+
+# Run NLS first
+nls = NLSEstimator()
+nls_result = nls.fit(data)
+
+# Use NLS estimates as MCMC initial values
+init_params = {
+    "lambda": nls_result.params["lambda"],
+    "gamma": nls_result.params["gamma"],
+    "w1": nls_result.params["w1"],
+    "h": nls_result.params["h"],
+    "m": nls_result.params["m"],
+}
+
+mcmc = MCMCEstimator(init_params=init_params)
+result = mcmc.fit(data)
+```
+
+### AR(1) Autocorrelated Errors
+
+Model temporal correlation in prediction errors:
+
+```python
+mcmc = MCMCEstimator(
+    ar_errors=True,  # Enable AR(1) error model
+    likelihood="studentt",
+)
+result = mcmc.fit(data)
+
+# Access AR(1) coefficient
+rho_samples = result.params["rho"]
+print(f"rho: {rho_samples.mean():.3f}")
+```
+
+### Using Covariates
+
+Include time-varying covariates that affect the hazard rate:
 
 ```python
 # Create covariate array (T+1 observations, p covariates)
@@ -99,7 +163,7 @@ z = np.column_stack([
 
 data = CoreDepositData(
     V_obs=df["volume"].values,
-    inflow=df["input"].values,
+    inflow=df["inflow"].values,
     V0=df["volume"].values[0],
     z=z,  # Add covariates
 )
@@ -107,6 +171,22 @@ data = CoreDepositData(
 # Fit with covariates
 result = mcmc.fit(data)
 print(result.params["beta"])  # Covariate coefficients
+```
+
+### Derived Metrics
+
+Compute median survival time (half-life) for sticky deposits:
+
+```python
+from coredeposit import compute_median_survival
+
+# For NLS result (returns float)
+t50 = compute_median_survival(nls_result)
+
+# For MCMC result (returns dict with uncertainty)
+t50 = compute_median_survival(mcmc_result, ci_prob=0.95)
+print(f"Median survival: {t50['mean']:.1f} months")
+print(f"95% CI: [{t50['lower']:.1f}, {t50['upper']:.1f}]")
 ```
 
 ## ArviZ Integration (MCMC)
@@ -131,13 +211,15 @@ az.plot_posterior(idata, hdi_prob=0.95)
 
 ## Requirements
 
-- Python >= 3.11
+- Python >= 3.13
 - JAX
 - NumPyro
 - NumPy
 - SciPy
 - Pandas (for examples)
 - ArviZ (optional, for MCMC diagnostics)
+
+For GPU support, install with `--extra cuda` which adds `jax[cuda12]`.
 
 ## License
 

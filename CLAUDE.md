@@ -12,9 +12,11 @@ Core deposit analysis library implementing a two-type deposit model with time-de
 # Install dependencies (uses uv package manager)
 uv sync
 
-# Run examples
-uv run python examples/example_run.py
-uv run python examples/example_mcmc.py
+# Install with CUDA support
+uv sync --extra cuda
+
+# Run example
+uv run python examples/run_mcmc.py
 
 # Lint
 uv run ruff check src/
@@ -31,15 +33,16 @@ uv run ty check src/
 ```
 core-deposit-analysis/
 ├── docs/
-│   └── model.md          # Mathematical model specification
+│   ├── model.md          # Mathematical model specification
+│   └── estimation.md     # Estimation methods (NLS, MCMC)
 ├── examples/
-│   ├── example_run.py    # Basic NLS and MCMC usage
-│   └── example_mcmc.py   # MCMC with ArviZ visualization
-├── data/                  # Sample datasets
+│   ├── run_mcmc.py       # MCMC estimation with ArviZ visualization
+│   └── data/             # Sample datasets (boj.csv, covariate.csv)
 └── src/coredeposit/
     ├── __init__.py       # Public API exports + JAX config
     ├── types.py          # CoreDepositData, EstimationResult, type aliases
     ├── normalize.py      # Data normalization for numerical stability
+    ├── metrics.py        # Derived metrics (compute_median_survival)
     ├── model/
     │   ├── __init__.py   # Exports: V_model, weibull_hazard, S2_matrix, S2_init_vector
     │   ├── hazard.py     # weibull_hazard()
@@ -59,9 +62,15 @@ core-deposit-analysis/
 
 - [model/balance.py](src/coredeposit/model/balance.py) - `V_model()` computes predicted deposit balances. Weibull hazard parameters: `lam` (scale), `gam` (shape). Model parameters: `w1` (transactional proportion), `h` (first-month exit rate), `m` (initial balance average age).
 
-- [estimators/mcmc.py](src/coredeposit/estimators/mcmc.py) - Bayesian estimation via NumPyro NUTS. Supports both covariate and no-covariate models. Uses Student-t likelihood by default for robustness.
+- [estimators/mcmc.py](src/coredeposit/estimators/mcmc.py) - Bayesian estimation via NumPyro NUTS. Supports both covariate and no-covariate models. Uses Student-t likelihood by default for robustness. Key options:
+  - `init_params`: Initialize from NLS estimates for better convergence
+  - `ar_errors`: Model observation errors with AR(1) autocorrelation
 
 - [estimators/nls.py](src/coredeposit/estimators/nls.py) - Non-linear least squares via scipy. Supports optional fixed `m` parameter.
+
+- [estimators/priors.py](src/coredeposit/estimators/priors.py) - `CoreDepositPriors` dataclass with default weakly informative priors. Includes `rho_prior` for AR(1) coefficient.
+
+- [metrics.py](src/coredeposit/metrics.py) - `compute_median_survival()` calculates half-life for sticky deposits with uncertainty quantification for MCMC results.
 
 **Parameter Transformations** (in NLS):
 - `lam`, `gam`, `m`: log-transformed (positive)
@@ -70,3 +79,7 @@ core-deposit-analysis/
 **Type Annotations**:
 - `ArrayLike = JaxArray | NDArray` - accepts both JAX and NumPy arrays
 - `Scalar = JaxArray | float` - scalar values that may be JAX traced
+
+**Device Configuration** (for MCMC):
+- Call `numpyro.set_host_device_count(n)` before any JAX operations to enable parallel chains on CPU
+- Use `uv sync --extra cuda` for GPU support with CUDA 12
