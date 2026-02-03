@@ -184,6 +184,40 @@ class TestMCMCEstimatorWithCovariates:
         assert "beta" in result.params
         assert result.params["beta"].shape == (50, 1)
 
+    def test_mcmc_with_2d_covariates(self):
+        """Test MCMC with multiple covariates."""
+        np.random.seed(42)
+        T = 30
+        V0 = 100.0
+
+        inflow = 5 + np.random.randn(T + 1) * 0.5
+        inflow[0] = 0
+
+        # Two covariates
+        z = np.random.randn(T + 1, 2) * 0.5
+        beta = np.array([0.2, -0.1])
+        weight = np.exp(z @ beta)
+
+        V_true = np.array(V_model(
+            lam=0.05, gam=1.0, w1=0.3, h=0.8, m=12.0,
+            V0=V0, inflow=inflow, weight=weight
+        ))
+        V_obs = V_true + np.random.randn(T + 1) * 0.3
+        V_obs[0] = V0
+
+        data = CoreDepositData(V_obs=V_obs, inflow=inflow, V0=V0, z=z)
+
+        estimator = MCMCEstimator(
+            num_warmup=50,
+            num_samples=50,
+            num_chains=1,
+            seed=0,
+        )
+        result = estimator.fit(data)
+
+        assert "beta" in result.params
+        assert result.params["beta"].shape == (50, 2)
+
 
 class TestMCMCEstimatorInitParams:
     """Test MCMCEstimator with initial parameters."""
