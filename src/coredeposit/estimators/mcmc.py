@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
-from numpyro.infer import MCMC, NUTS
+from numpyro.infer import MCMC, NUTS, init_to_value
 
 from ..types import CoreDepositData, EstimationResult, NDArray
 from ..normalize import normalize
@@ -56,6 +56,11 @@ class MCMCEstimator(Estimator):
     priors : CoreDepositPriors or None, optional
         Custom prior distributions. If None, uses default_priors() which
         provides weakly informative priors. Default is None.
+    init_params : dict or None, optional
+        Initial parameter values for MCMC chains. If provided, should be a
+        dictionary with keys matching parameter names ('lambda', 'gamma',
+        'w1', 'h', 'm', and optionally 'beta'). Useful for initializing
+        from NLS estimates to improve convergence. Default is None.
 
     Attributes
     ----------
@@ -73,6 +78,8 @@ class MCMCEstimator(Estimator):
         Likelihood function type.
     priors : CoreDepositPriors or None
         Prior distributions.
+    init_params : dict or None
+        Initial parameter values.
 
     Examples
     --------
@@ -108,6 +115,7 @@ class MCMCEstimator(Estimator):
         target_accept: float = 0.9,
         likelihood: str = "studentt",
         priors: CoreDepositPriors | None = None,
+        init_params: dict[str, float] | None = None,
     ):
         """Initialize the MCMC estimator.
 
@@ -127,6 +135,10 @@ class MCMCEstimator(Estimator):
             Likelihood function: 'studentt' or 'normal'. Default is 'studentt'.
         priors : CoreDepositPriors or None, optional
             Custom prior distributions. Default is None (use default priors).
+        init_params : dict or None, optional
+            Initial parameter values for MCMC chains. Keys should match
+            parameter names ('lambda', 'gamma', 'w1', 'h', 'm').
+            Useful for initializing from NLS estimates. Default is None.
         """
         self.num_warmup = num_warmup
         self.num_samples = num_samples
@@ -135,6 +147,7 @@ class MCMCEstimator(Estimator):
         self.target_accept = target_accept
         self.likelihood = likelihood
         self.priors = priors
+        self.init_params = init_params
 
     def fit(self, data: CoreDepositData) -> EstimationResult:
         """Estimate model parameters using Bayesian MCMC.
@@ -259,7 +272,22 @@ class MCMCEstimator(Estimator):
                     obs=V_obs[idx],
                 )
 
-        kernel = NUTS(model, target_accept_prob=self.target_accept)
+        # Use init_to_value strategy if init_params provided
+        # This allows partial initialization (only specified params)
+        if self.init_params is not None:
+            init_values = {
+                k: jnp.asarray(v, dtype=jnp.float64)
+                for k, v in self.init_params.items()
+            }
+            init_strategy = init_to_value(values=init_values)
+        else:
+            init_strategy = None
+
+        kernel = NUTS(
+            model,
+            target_accept_prob=self.target_accept,
+            init_strategy=init_strategy,
+        )
         mcmc = MCMC(
             kernel,
             num_warmup=self.num_warmup,

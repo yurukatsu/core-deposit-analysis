@@ -53,6 +53,12 @@ class DeviceConfig:
         Returns:
             The actual platform being used.
         """
+        # Set CPU device count BEFORE any JAX operations
+        # This must be done before JAX is initialized
+        if self.platform in ("cpu", "auto"):
+            num_devices = self.num_devices or 2
+            numpyro.set_host_device_count(num_devices)
+
         # Determine platform
         if self.platform == "auto":
             available = jax.devices()
@@ -60,15 +66,10 @@ class DeviceConfig:
         else:
             actual_platform = self.platform
 
-        # Set JAX platform (must be done before any JAX operations)
-        jax.config.update("jax_platform_name", actual_platform)
-
-        # Set device count for parallel chains
+        # Set device count for display
         if actual_platform == "cpu":
             num_devices = self.num_devices or 2
-            numpyro.set_host_device_count(num_devices)
         else:
-            # For GPU, use available devices
             num_devices = self.num_devices or len(jax.devices())
 
         print(f"  Platform: {actual_platform}")
