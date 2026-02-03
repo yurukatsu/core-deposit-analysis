@@ -14,6 +14,7 @@ from scipy.optimize import least_squares, minimize
 
 from ..types import CoreDepositData, EstimationResult, NDArray
 from ..model.balance import V_model
+from ..model.w1 import w1_logistic
 from .base import Estimator
 from .map_priors import MAPPriors
 
@@ -149,7 +150,9 @@ class NLSEstimator(Estimator):
             - V_obs : array of shape (T+1,) with observed deposit balances
             - inflow : array of shape (T+1,) with deposit inflows
             - V0 : initial deposit balance at time 0
-            - z : optional covariates of shape (T+1,) or (T+1, p)
+            - z : optional covariates of shape (T+1,) or (T+1, p) for S2 hazard
+            - w1_features : optional features of shape (T+1,) or (T+1, q) for
+              time-varying w1. When provided, w1(t) = sigmoid(a + b'x(t)).
 
         m_fixed : float or None, optional
             If provided, fix the initial age parameter m to this value
@@ -167,10 +170,13 @@ class NLSEstimator(Estimator):
 
                 - 'lambda': Weibull scale parameter (float)
                 - 'gamma': Weibull shape parameter (float)
-                - 'w1': Transactional deposit proportion (float, 0-1)
+                - 'w1': Transactional deposit proportion (float, 0-1).
+                  For time-varying models, this is the mean w1.
                 - 'h': Transactional exit rate (float, 0-1)
                 - 'm': Initial deposit age in months (float)
                 - 'beta': Covariate coefficients (array, only if z provided)
+                - 'w1_a': w1 intercept on logit scale (only if w1_features provided)
+                - 'w1_b': w1 coefficients (array, only if w1_features provided)
 
             diagnostics : dict
                 Optimization diagnostics:
@@ -180,15 +186,17 @@ class NLSEstimator(Estimator):
                 - 'cost': Final cost function value (float)
                 - 'm_fixed': Value of m_fixed if provided (float or None)
                 - 'method': 'nls' or 'map' (str)
+                - 'w1_time_varying': Whether w1 is time-varying (bool)
 
         Notes
         -----
         The optimization starts from x0 = zeros, which corresponds to:
         - λ = exp(0) = 1.0
         - γ = exp(0) = 1.0
-        - w1 = sigmoid(0) = 0.5
+        - w1 = sigmoid(0) = 0.5 (or w1_a = 0 for time-varying)
         - h = sigmoid(0) = 0.5
         - m = exp(0) = 1.0 (if not fixed)
+        - w1_b = zeros (if w1_features provided)
         - β = zeros (if covariates provided)
 
         The residuals are computed for t = 1, ..., T (excluding t=0 which
@@ -198,6 +206,7 @@ class NLSEstimator(Estimator):
         inflow = np.asarray(data.inflow, dtype=float)
         V0 = float(data.V0)
 
+        # S2 covariates (hazard)
         z = data.z
         if z is not None:
             z = np.asarray(z, dtype=float)
@@ -207,30 +216,52 @@ class NLSEstimator(Estimator):
         else:
             p = 0
 
+        # w1 features (time-varying transactional proportion)
+        w1_features = data.w1_features
+        if w1_features is not None:
+            w1_features = np.asarray(w1_features, dtype=float)
+            if w1_features.ndim == 1:
+                w1_features = w1_features.reshape(-1, 1)
+            q = w1_features.shape[1]
+        else:
+            q = 0
+
         T = V_obs.shape[0] - 1
 
         def unpack(x: np.ndarray) -> tuple:
             lam = np.exp(x[0])
             gam = np.exp(x[1])
-            w1 = self._sigmoid(x[2])
             h = self._sigmoid(x[3])
 
             if m_fixed is None:
                 m = np.exp(x[4])
-                beta_start = 5
+                next_idx = 5
             else:
                 m = m_fixed
-                beta_start = 4
+                next_idx = 4
+
+            # w1 handling: constant vs time-varying
+            if q > 0:
+                # Time-varying w1: x[2] is w1_a (intercept on logit scale)
+                w1_a = x[2]
+                w1_b = x[next_idx : next_idx + q]
+                next_idx = next_idx + q
+                w1 = np.array(w1_logistic(w1_a, w1_b, w1_features))
+            else:
+                # Constant w1
+                w1 = self._sigmoid(x[2])
+                w1_a = None
+                w1_b = None
 
             if p > 0:
-                beta = x[beta_start : beta_start + p]
+                beta = x[next_idx : next_idx + p]
             else:
                 beta = None
 
-            return lam, gam, w1, h, m, beta
+            return lam, gam, w1, h, m, beta, w1_a, w1_b
 
         def compute_residuals(x: np.ndarray) -> np.ndarray:
-            lam, gam, w1, h, m, beta = unpack(x)
+            lam, gam, w1, h, m, beta, _, _ = unpack(x)
 
             if beta is None:
                 weight = np.ones(T + 1)
@@ -252,7 +283,9 @@ class NLSEstimator(Estimator):
 
             return Vhat[1:] - V_obs[1:]
 
-        n_param = 5 + p if m_fixed is None else 4 + p
+        # Parameter count: lam, gam, w1_a/w1, h, [m], [w1_b...], [beta...]
+        n_base = 5 if m_fixed is None else 4
+        n_param = n_base + q + p
         x0 = np.zeros(n_param)
 
         if self.priors is None:
@@ -274,9 +307,12 @@ class NLSEstimator(Estimator):
                 residuals = compute_residuals(x)
                 sse = 0.5 * np.sum(residuals**2)
 
-                lam, gam, w1, h, m, beta = unpack(x)
+                lam, gam, w1, h, m, beta, w1_a, w1_b = unpack(x)
+                # For MAP with time-varying w1, use w1_a for the prior
+                # (w1_a on logit scale corresponds to baseline w1)
+                w1_for_prior = self._sigmoid(w1_a) if w1_a is not None else w1
                 neg_log_prior = self.priors.neg_log_prob(
-                    lam=lam, gam=gam, w1=w1, h=h, m=m, beta=beta
+                    lam=lam, gam=gam, w1=w1_for_prior, h=h, m=m, beta=beta
                 )
 
                 return sse + neg_log_prior
@@ -293,15 +329,25 @@ class NLSEstimator(Estimator):
             x_opt = res.x
             method = "map"
 
-        lam, gam, w1, h, m, beta = unpack(x_opt)
+        lam, gam, w1, h, m, beta, w1_a, w1_b = unpack(x_opt)
 
         params = {
             "lambda": float(lam),
             "gamma": float(gam),
-            "w1": float(w1),
             "h": float(h),
             "m": float(m),
         }
+
+        # w1 parameters
+        if w1_a is not None:
+            # Time-varying w1: store coefficients
+            params["w1_a"] = float(w1_a)
+            params["w1_b"] = w1_b
+            # Also store mean w1 for convenience
+            params["w1"] = float(np.mean(w1))
+        else:
+            params["w1"] = float(w1)
+
         if beta is not None:
             params["beta"] = beta
 
@@ -313,6 +359,7 @@ class NLSEstimator(Estimator):
                 "cost": float(cost),
                 "m_fixed": m_fixed,
                 "method": method,
+                "w1_time_varying": q > 0,
             },
         )
 
@@ -363,6 +410,7 @@ class NLSEstimator(Estimator):
         inflow = np.asarray(data.inflow, dtype=float)
         T = inflow.shape[0] - 1
 
+        # S2 covariates (hazard)
         z = data.z
         if z is not None:
             z = np.asarray(z, dtype=float)
@@ -376,11 +424,26 @@ class NLSEstimator(Estimator):
         else:
             weight = np.ones(T + 1)
 
+        # w1: constant or time-varying
+        if "w1_a" in params:
+            # Time-varying w1
+            w1_features = data.w1_features
+            if w1_features is None:
+                raise ValueError(
+                    "w1_features required in data for model with time-varying w1"
+                )
+            w1_features = np.asarray(w1_features, dtype=float)
+            if w1_features.ndim == 1:
+                w1_features = w1_features.reshape(-1, 1)
+            w1 = np.array(w1_logistic(params["w1_a"], params["w1_b"], w1_features))
+        else:
+            w1 = params["w1"]
+
         Vhat = np.array(
             V_model(
                 lam=params["lambda"],
                 gam=params["gamma"],
-                w1=params["w1"],
+                w1=w1,
                 h=params["h"],
                 m=params["m"],
                 V0=V0,

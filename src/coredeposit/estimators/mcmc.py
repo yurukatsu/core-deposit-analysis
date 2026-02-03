@@ -16,6 +16,7 @@ from numpyro.infer.initialization import init_to_value
 from ..types import CoreDepositData, EstimationResult, NDArray
 from ..normalize import normalize
 from ..model.balance import V_model
+from ..model.w1 import w1_logistic
 from .base import Estimator
 from .priors import CoreDepositPriors, default_priors
 
@@ -231,6 +232,7 @@ class MCMCEstimator(Estimator):
 
         T = V_obs.shape[0] - 1
 
+        # S2 covariates (hazard)
         has_covariate = data.z is not None
         if has_covariate:
             z = jnp.asarray(data.z, dtype=jnp.float64)
@@ -241,16 +243,35 @@ class MCMCEstimator(Estimator):
             z = None
             p = 0
 
-        priors = self.priors or default_priors(p)
+        # w1 features (time-varying transactional proportion)
+        has_w1_features = data.w1_features is not None
+        if has_w1_features:
+            w1_features = jnp.asarray(data.w1_features, dtype=jnp.float64)
+            if w1_features.ndim == 1:
+                w1_features = w1_features.reshape(-1, 1)
+            q = w1_features.shape[1]
+        else:
+            w1_features = None
+            q = 0
+
+        priors = self.priors or default_priors(p, q)
 
         def model():
             lam = numpyro.sample("lambda", priors.lambda_prior)
             gam = numpyro.sample("gamma", priors.gamma_prior)
-            w1 = numpyro.sample("w1", priors.w1_prior)
             h = numpyro.sample("h", priors.h_prior)
             m = numpyro.sample("m", priors.m_prior)
             sigma = numpyro.sample("sigma", priors.sigma_prior)
 
+            # w1: constant or time-varying
+            if has_w1_features and priors.w1_a_prior is not None:
+                w1_a = numpyro.sample("w1_a", priors.w1_a_prior)
+                w1_b = numpyro.sample("w1_b", priors.w1_b_prior)
+                w1 = w1_logistic(w1_a, w1_b, w1_features)
+            else:
+                w1 = numpyro.sample("w1", priors.w1_prior)
+
+            # S2 covariates (hazard weight)
             if has_covariate and priors.beta_prior is not None:
                 beta = numpyro.sample("beta", priors.beta_prior)
                 weight = jnp.exp(z @ beta)
@@ -394,6 +415,7 @@ class MCMCEstimator(Estimator):
         inflow = np.asarray(data.inflow, dtype=float)
         T = inflow.shape[0] - 1
 
+        # S2 covariates (hazard)
         z = data.z
         has_covariate = z is not None
         if has_covariate:
@@ -401,13 +423,31 @@ class MCMCEstimator(Estimator):
             if z.ndim == 1:
                 z = z.reshape(-1, 1)
 
+        # w1 features (time-varying transactional proportion)
+        has_w1_features = "w1_a" in params
+        if has_w1_features:
+            w1_features = data.w1_features
+            if w1_features is None:
+                raise ValueError(
+                    "w1_features required in data for model with time-varying w1"
+                )
+            w1_features = np.asarray(w1_features, dtype=float)
+            if w1_features.ndim == 1:
+                w1_features = w1_features.reshape(-1, 1)
+
         # Get sample arrays
         lam_samples = np.asarray(params["lambda"])
         gam_samples = np.asarray(params["gamma"])
-        w1_samples = np.asarray(params["w1"])
         h_samples = np.asarray(params["h"])
         m_samples = np.asarray(params["m"])
         n_samples = len(lam_samples)
+
+        # w1 samples: either constant or time-varying
+        if has_w1_features:
+            w1_a_samples = np.asarray(params["w1_a"])
+            w1_b_samples = np.asarray(params["w1_b"])
+        else:
+            w1_samples = np.asarray(params["w1"])
 
         if has_covariate and "beta" in params:
             beta_samples = np.asarray(params["beta"])
@@ -423,11 +463,17 @@ class MCMCEstimator(Estimator):
             else:
                 weight = np.ones(T + 1)
 
+            # w1: constant or time-varying
+            if has_w1_features:
+                w1 = np.array(w1_logistic(w1_a_samples[i], w1_b_samples[i], w1_features))
+            else:
+                w1 = w1_samples[i]
+
             V_samples[i] = np.array(
                 V_model(
                     lam=lam_samples[i],
                     gam=gam_samples[i],
-                    w1=w1_samples[i],
+                    w1=w1,
                     h=h_samples[i],
                     m=m_samples[i],
                     V0=V0,

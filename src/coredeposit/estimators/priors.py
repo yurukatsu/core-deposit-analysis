@@ -72,6 +72,8 @@ class CoreDepositPriors:
     nu_prior: dist.Distribution
     rho_prior: dist.Distribution
     beta_prior: dist.Distribution | None = None
+    w1_a_prior: dist.Distribution | None = None
+    w1_b_prior: dist.Distribution | None = None
 
     @staticmethod
     def normal_likelihood(loc, sigma):
@@ -115,7 +117,7 @@ class CoreDepositPriors:
         return dist.StudentT(df=nu, loc=loc, scale=sigma)
 
 
-def default_priors(p: int = 0) -> CoreDepositPriors:
+def default_priors(p: int = 0, q: int = 0) -> CoreDepositPriors:
     """Create default prior distributions for the core deposit model.
 
     This function returns weakly informative priors suitable for typical
@@ -127,8 +129,11 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
     Parameters
     ----------
     p : int, optional
-        Number of covariate dimensions. If p > 0, beta_prior is created
+        Number of S2 covariate dimensions. If p > 0, beta_prior is created
         as a multivariate Normal distribution. Default is 0 (no covariates).
+    q : int, optional
+        Number of w1 feature dimensions. If q > 0, w1_a_prior and w1_b_prior
+        are created for time-varying w1 model. Default is 0 (constant w1).
 
     Returns
     -------
@@ -141,6 +146,7 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
             Weibull shape, median ~1.0, supports roughly [0.5, 2.0]
         - w1_prior: Beta(2.0, 6.0)
             Transactional proportion, mean ~0.25, favors lower values
+            (used when q=0, i.e., constant w1)
         - h_prior: Beta(2.0, 6.0)
             Exit rate, mean ~0.25, favors lower values
         - m_prior: LogNormal(2.5, 0.4)
@@ -152,22 +158,36 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
         - rho_prior: Uniform(-1, 1)
             AR(1) autocorrelation coefficient for stationary errors
         - beta_prior: Normal(0, 0.3) for each of p coefficients, or None
+        - w1_a_prior: Normal(-1, 1) for w1 intercept on logit scale, or None
+        - w1_b_prior: Normal(0, 0.5) for each of q w1 coefficients, or None
 
     Examples
     --------
-    >>> # No covariates
+    >>> # No covariates, constant w1
     >>> priors = default_priors()
     >>> priors.beta_prior is None
     True
+    >>> priors.w1_a_prior is None
+    True
 
-    >>> # With 3 covariates
-    >>> priors = default_priors(p=3)
+    >>> # With 3 S2 covariates and 2 w1 features
+    >>> priors = default_priors(p=3, q=2)
     >>> priors.beta_prior is not None
+    True
+    >>> priors.w1_a_prior is not None
     True
     """
     beta_prior = None
     if p > 0:
         beta_prior = dist.Normal(0.0, 0.3).expand((p,)).to_event(1)
+
+    # Priors for time-varying w1: w1(t) = sigmoid(w1_a + w1_b' x(t))
+    w1_a_prior = None
+    w1_b_prior = None
+    if q > 0:
+        # w1_a is intercept on logit scale. Normal(-1, 1) gives baseline w1 ~0.27
+        w1_a_prior = dist.Normal(-1.0, 1.0)
+        w1_b_prior = dist.Normal(0.0, 0.5).expand((q,)).to_event(1)
 
     return CoreDepositPriors(
         lambda_prior=dist.LogNormal(-3.0, 0.6),
@@ -179,4 +199,6 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
         sigma_prior=dist.HalfNormal(0.05),
         nu_prior=dist.Exponential(1.0),
         rho_prior=dist.Uniform(-1.0, 1.0),
+        w1_a_prior=w1_a_prior,
+        w1_b_prior=w1_b_prior,
     )

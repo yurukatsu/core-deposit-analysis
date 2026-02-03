@@ -44,14 +44,20 @@ class CoreDepositData:
     V0 : float
         Initial deposit balance at time 0. Usually equals V_obs[0].
     z : NDArray | None, optional
-        Exogenous covariates affecting the hazard rate. Shape: (T+1,) for single
-        covariate or (T+1, p) for p covariates. Default is None (no covariates).
+        Exogenous covariates affecting the hazard rate (S2). Shape: (T+1,) for
+        single covariate or (T+1, p) for p covariates. Default is None.
+    w1_features : NDArray | None, optional
+        Features for time-varying w1 (transactional proportion).
+        Shape: (T+1,) for single feature or (T+1, q) for q features.
+        When provided, w1 is modeled as: w1(t) = sigmoid(a + b' w1_features(t)).
+        Default is None (constant w1).
     """
 
     V_obs: NDArray
     inflow: NDArray
     V0: float
     z: NDArray | None = None
+    w1_features: NDArray | None = None
 
 
 @dataclass

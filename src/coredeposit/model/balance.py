@@ -46,8 +46,8 @@ def V_model(
 
     The balance at time t is computed as:
 
-        V(t) = S1_term(t)
-             + (1 - w1) × Σᵢ inflow(i) × S2(t|i)
+        V(t) = Σᵢ w1(i) × inflow(i) × S1(t|i)
+             + Σᵢ (1 - w1(i)) × inflow(i) × S2(t|i)
              + V0 × S2_init(t)
 
     where:
@@ -63,6 +63,8 @@ def V_model(
         Weibull shape parameter (γ > 0) for sticky deposits.
     w1 : ArrayLike
         Proportion of inflows that are transactional deposits (0 < w1 < 1).
+        Can be scalar (constant over time) or array of shape (T+1,) for
+        time-varying proportion.
     h : ArrayLike
         Exit rate for transactional deposits (0 < h < 1).
         The interpretation depends on the S1 model used.
@@ -102,26 +104,29 @@ def V_model(
     - Sticky deposit survival follows a Weibull distribution with
       optional time-varying covariates
 
+    When w1 is time-varying, w1(i) determines the split between
+    transactional and sticky deposits for inflow received at time i.
+
     To customize S1 behavior, either:
     - Pass a custom `s1_term_fn` that follows the same signature
     - Modify `S1_term_default` in the s1 module
 
     Examples
     --------
-    Using the default immediate exit S1 model:
+    Using constant w1:
 
     >>> V = V_model(lam=0.05, gam=1.0, w1=0.3, h=0.8, m=12, V0=100,
     ...             inflow=inflow, weight=np.ones(T+1))
 
-    Using the geometric S1 model:
+    Using time-varying w1:
 
-    >>> from coredeposit.model.s1 import S1_term_geometric
-    >>> V = V_model(lam=0.05, gam=1.0, w1=0.3, h=0.8, m=12, V0=100,
-    ...             inflow=inflow, weight=np.ones(T+1),
-    ...             s1_term_fn=S1_term_geometric)
+    >>> w1_array = np.array([0.3, 0.4, 0.2, ...])  # shape (T+1,)
+    >>> V = V_model(lam=0.05, gam=1.0, w1=w1_array, h=0.8, m=12, V0=100,
+    ...             inflow=inflow, weight=np.ones(T+1))
     """
     inflow = jnp.asarray(inflow)
     weight = jnp.asarray(weight)
+    w1 = jnp.asarray(w1)
     T = int(inflow.shape[0] - 1)
 
     # S2 (sticky deposits) survival
@@ -134,7 +139,9 @@ def V_model(
     term1 = s1_term_fn(inflow, w1, h, T)
 
     # Term 2: Sticky deposits from all past inflows
-    term2 = (1.0 - w1) * (S2 @ inflow)
+    # Weight inflow by (1-w1) element-wise (handles both scalar and array w1)
+    weighted_inflow = (1.0 - w1) * inflow
+    term2 = S2 @ weighted_inflow
 
     # Term 3: Surviving initial balance
     term0 = V0 * S2_init

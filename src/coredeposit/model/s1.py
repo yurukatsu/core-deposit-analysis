@@ -129,7 +129,7 @@ def S1_term_immediate_exit(
 ) -> JaxArray:
     """Compute S1 contribution to balance for immediate exit model (default).
 
-    This is the term: w1 × inflow(t) × (1 - h) for t >= 1
+    This is the term: w1(t) × inflow(t) × (1 - h) for t >= 1
 
     Parameters
     ----------
@@ -137,6 +137,7 @@ def S1_term_immediate_exit(
         Deposit inflows at each time point. Shape: (T+1,).
     w1 : ArrayLike
         Proportion of inflows that are transactional deposits.
+        Can be scalar (constant) or array of shape (T+1,) for time-varying.
     h : ArrayLike
         First-month exit rate.
     T : int
@@ -148,9 +149,17 @@ def S1_term_immediate_exit(
         S1 contribution to balance at each time. Shape: (T+1,).
     """
     inflow = jnp.asarray(inflow)
+    w1 = jnp.asarray(w1)
+
+    # Handle both scalar and array w1
+    if w1.ndim == 0:
+        w1_vals = w1
+    else:
+        w1_vals = w1[1:]
+
     # Only current period's inflow survives, and only partially
     term = jnp.zeros(T + 1, dtype=inflow.dtype)
-    term = term.at[1:].set(w1 * inflow[1:] * (1.0 - h))
+    term = term.at[1:].set(w1_vals * inflow[1:] * (1.0 - h))
     return term
 
 
@@ -162,7 +171,7 @@ def S1_term_geometric(
 ) -> JaxArray:
     """Compute S1 contribution to balance for geometric model.
 
-    This computes: w1 × Σᵢ inflow(i) × S1(t|i)
+    This computes: Σᵢ w1(i) × inflow(i) × S1(t|i)
     where S1(t|i) = (1-h)^(t-i+1).
 
     Parameters
@@ -171,6 +180,7 @@ def S1_term_geometric(
         Deposit inflows at each time point. Shape: (T+1,).
     w1 : ArrayLike
         Proportion of inflows that are transactional deposits.
+        Can be scalar (constant) or array of shape (T+1,) for time-varying.
     h : ArrayLike
         Per-period exit rate.
     T : int
@@ -183,7 +193,11 @@ def S1_term_geometric(
     """
     S1 = S1_matrix_geometric(T, h)
     inflow = jnp.asarray(inflow)
-    return w1 * (S1 @ inflow)
+    w1 = jnp.asarray(w1)
+
+    # Weight inflow by w1 (element-wise for time-varying w1)
+    weighted_inflow = w1 * inflow
+    return S1 @ weighted_inflow
 
 
 # Default S1 term function (used by V_model)
