@@ -7,11 +7,18 @@ Weibull survival dynamics.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
 from jax import Array as JaxArray
 
 from ..types import ArrayLike
 from .survival import S2_matrix, S2_init_vector
+from .s1 import S1_term_default
+
+if TYPE_CHECKING:
+    S1TermFn = Callable[[ArrayLike, ArrayLike, ArrayLike, int], JaxArray]
 
 
 def V_model(
@@ -24,6 +31,7 @@ def V_model(
     inflow: ArrayLike,
     weight: ArrayLike,
     dt: float = 1.0,
+    s1_term_fn: S1TermFn | None = None,
 ) -> JaxArray:
     """Compute predicted deposit balances under the two-type model.
 
@@ -38,12 +46,12 @@ def V_model(
 
     The balance at time t is computed as:
 
-        V(t) = w1 × inflow(t) × (1 - h)
+        V(t) = S1_term(t)
              + (1 - w1) × Σᵢ inflow(i) × S2(t|i)
              + V0 × S2_init(t)
 
     where:
-    - First term: remaining transactional deposits from current period
+    - First term: S1 (transactional) deposit contribution
     - Second term: sticky deposits from all past inflows
     - Third term: surviving initial balance
 
@@ -56,9 +64,8 @@ def V_model(
     w1 : ArrayLike
         Proportion of inflows that are transactional deposits (0 < w1 < 1).
     h : ArrayLike
-        Exit rate for transactional deposits in the first month (0 < h < 1).
-        A value of h=0.8 means 80% of transactional deposits exit within
-        the first month.
+        Exit rate for transactional deposits (0 < h < 1).
+        The interpretation depends on the S1 model used.
     m : ArrayLike
         Average age of the initial balance in months at time 0.
         This accounts for the fact that V0 has already survived some time
@@ -73,6 +80,10 @@ def V_model(
         for the model with covariates.
     dt : float, optional
         Time step size in months. Default is 1.0.
+    s1_term_fn : Callable or None, optional
+        Function to compute S1 (transactional) deposit contribution.
+        Signature: (inflow, w1, h, T) -> JaxArray of shape (T+1,).
+        If None, uses the default immediate exit model from s1.py.
 
     Returns
     -------
@@ -88,19 +99,39 @@ def V_model(
 
     The model assumes:
     - All initial balance is sticky (type 2) deposits
-    - Transactional deposits only survive one period with probability (1-h)
     - Sticky deposit survival follows a Weibull distribution with
       optional time-varying covariates
+
+    To customize S1 behavior, either:
+    - Pass a custom `s1_term_fn` that follows the same signature
+    - Modify `S1_term_default` in the s1 module
+
+    Examples
+    --------
+    Using the default immediate exit S1 model:
+
+    >>> V = V_model(lam=0.05, gam=1.0, w1=0.3, h=0.8, m=12, V0=100,
+    ...             inflow=inflow, weight=np.ones(T+1))
+
+    Using the geometric S1 model:
+
+    >>> from coredeposit.model.s1 import S1_term_geometric
+    >>> V = V_model(lam=0.05, gam=1.0, w1=0.3, h=0.8, m=12, V0=100,
+    ...             inflow=inflow, weight=np.ones(T+1),
+    ...             s1_term_fn=S1_term_geometric)
     """
     inflow = jnp.asarray(inflow)
     weight = jnp.asarray(weight)
     T = int(inflow.shape[0] - 1)
 
+    # S2 (sticky deposits) survival
     S2 = S2_matrix(lam=lam, gam=gam, T=T, weight=weight, dt=dt)
     S2_init = S2_init_vector(lam=lam, gam=gam, T=T, m=m, weight=weight, dt=dt)
 
-    # Term 1: Transactional deposits (survive only one period)
-    term1 = jnp.zeros(T + 1, dtype=inflow.dtype).at[1:].set(w1 * inflow[1:] * (1.0 - h))
+    # Term 1: Transactional deposits (S1)
+    if s1_term_fn is None:
+        s1_term_fn = S1_term_default
+    term1 = s1_term_fn(inflow, w1, h, T)
 
     # Term 2: Sticky deposits from all past inflows
     term2 = (1.0 - w1) * (S2 @ inflow)
