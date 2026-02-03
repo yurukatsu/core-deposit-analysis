@@ -78,7 +78,11 @@ $$
 
 ### 4.1 Transactional Deposits
 
-Transactional deposits are modeled with immediate exit behavior. The discrete-time hazard function is:
+Transactional deposits can be modeled with different survival functions. The default is the **immediate exit** model, but alternatives are available.
+
+#### 4.1.1 Immediate Exit Model (Default)
+
+The discrete-time hazard function is:
 
 $$
 h_1(s \mid h) =
@@ -100,6 +104,42 @@ S_1(s \mid h) =
 0 & s \geq 2
 \end{cases}
 $$
+
+This model assumes transactional deposits survive at most one period.
+
+#### 4.1.2 Geometric Model (Alternative)
+
+A constant hazard (geometric) model where deposits exit at rate $h$ each period:
+
+$$
+h_1(s \mid h) = h \quad \forall s \geq 1
+$$
+
+The corresponding survival function is:
+
+$$
+S_1(s \mid h) = (1 - h)^s
+$$
+
+This model allows transactional deposits to survive multiple periods with exponentially decaying probability.
+
+#### 4.1.3 Implementation
+
+The S1 model is customizable via the `s1_term_fn` parameter in `V_model`:
+
+```python
+from coredeposit.model import V_model
+from coredeposit.model.s1 import S1_term_geometric
+
+# Use geometric S1 model
+V = V_model(..., s1_term_fn=S1_term_geometric)
+```
+
+Available S1 functions in `coredeposit.model.s1`:
+- `S1_term_immediate_exit` (default)
+- `S1_term_geometric`
+- `S1_immediate_exit`, `S1_geometric` (survival functions)
+- `S1_matrix_immediate_exit`, `S1_matrix_geometric` (survival matrices)
 
 ### 4.2 Sticky Deposits
 
