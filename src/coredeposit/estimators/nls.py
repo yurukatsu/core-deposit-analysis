@@ -2,6 +2,7 @@
 
 This module provides the NLSEstimator class for point estimation of
 core deposit model parameters using scipy's least_squares optimizer.
+Supports both standard NLS and MAP (Maximum A Posteriori) estimation.
 """
 
 from __future__ import annotations
@@ -9,11 +10,12 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
 
 from ..types import CoreDepositData, EstimationResult, NDArray
 from ..model.balance import V_model
 from .base import Estimator
+from .map_priors import MAPPriors
 
 
 class NLSEstimator(Estimator):
@@ -22,6 +24,9 @@ class NLSEstimator(Estimator):
     This estimator finds point estimates of model parameters by minimizing
     the sum of squared residuals between predicted and observed deposit
     balances. Supports both models with and without covariates.
+
+    When `priors` is provided, performs MAP (Maximum A Posteriori) estimation
+    by adding prior penalty terms to the objective function.
 
     The optimization uses parameter transformations to handle constraints:
     - Positive parameters (λ, γ, m): log transform
@@ -37,9 +42,16 @@ class NLSEstimator(Estimator):
         - 'huber': Huber loss
         - 'cauchy': Cauchy loss (most robust to outliers)
         Default is 'soft_l1' for robustness against outliers.
+        Note: Only used when priors=None (standard NLS).
     f_scale : float, optional
         Scaling factor for the loss function. Residuals larger than f_scale
         are down-weighted. Only used when loss != 'linear'. Default is 0.05.
+        Note: Only used when priors=None (standard NLS).
+    priors : MAPPriors or None, optional
+        Prior distributions for MAP estimation. If None, performs standard
+        NLS without priors. If provided, uses scipy.optimize.minimize to
+        minimize: 0.5 * Σ(residual²) + negative_log_prior.
+        Default is None.
 
     Attributes
     ----------
@@ -47,9 +59,13 @@ class NLSEstimator(Estimator):
         The loss function being used.
     f_scale : float
         The scaling factor for robust loss.
+    priors : MAPPriors or None
+        Prior distributions for MAP estimation.
 
     Examples
     --------
+    Standard NLS estimation:
+
     >>> from coredeposit import NLSEstimator, CoreDepositData
     >>> import numpy as np
     >>> data = CoreDepositData(
@@ -61,22 +77,41 @@ class NLSEstimator(Estimator):
     >>> result = estimator.fit(data)
     >>> print(result.params['lambda'])
 
-    >>> # With fixed m parameter
+    MAP estimation with default priors:
+
+    >>> from coredeposit.estimators import default_map_priors
+    >>> priors = default_map_priors()
+    >>> estimator = NLSEstimator(priors=priors)
+    >>> result = estimator.fit(data)
+
+    With fixed m parameter:
+
     >>> result = estimator.fit(data, m_fixed=12.0)
     """
 
-    def __init__(self, *, loss: str = "soft_l1", f_scale: float = 0.05):
+    def __init__(
+        self,
+        *,
+        loss: str = "soft_l1",
+        f_scale: float = 0.05,
+        priors: MAPPriors | None = None,
+    ):
         """Initialize the NLS estimator.
 
         Parameters
         ----------
         loss : str, optional
             Loss function for robust regression. Default is 'soft_l1'.
+            Only used when priors=None.
         f_scale : float, optional
             Scaling factor for robust loss functions. Default is 0.05.
+            Only used when priors=None.
+        priors : MAPPriors or None, optional
+            Prior distributions for MAP estimation. Default is None.
         """
         self.loss = loss
         self.f_scale = f_scale
+        self.priors = priors
 
     @staticmethod
     def _sigmoid(x: float) -> float:
@@ -92,7 +127,7 @@ class NLSEstimator(Estimator):
         float
             Output value in (0, 1).
         """
-        return 1.0 / (1.0 + np.exp(-x))
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
     def fit(
         self,
@@ -100,10 +135,11 @@ class NLSEstimator(Estimator):
         *,
         m_fixed: float | None = None,
     ) -> EstimationResult:
-        """Estimate model parameters using non-linear least squares.
+        """Estimate model parameters using non-linear least squares or MAP.
 
-        Minimizes the sum of (weighted) squared residuals between predicted
-        and observed deposit balances using scipy's least_squares optimizer.
+        When priors=None, minimizes the sum of (weighted) squared residuals.
+        When priors is provided, performs MAP estimation by minimizing:
+            0.5 * Σ(residual²) - log p(θ)
 
         Parameters
         ----------
@@ -143,6 +179,7 @@ class NLSEstimator(Estimator):
                 - 'nfev': Number of function evaluations (int)
                 - 'cost': Final cost function value (float)
                 - 'm_fixed': Value of m_fixed if provided (float or None)
+                - 'method': 'nls' or 'map' (str)
 
         Notes
         -----
@@ -192,7 +229,7 @@ class NLSEstimator(Estimator):
 
             return lam, gam, w1, h, m, beta
 
-        def residuals(x: np.ndarray) -> np.ndarray:
+        def compute_residuals(x: np.ndarray) -> np.ndarray:
             lam, gam, w1, h, m, beta = unpack(x)
 
             if beta is None:
@@ -218,14 +255,45 @@ class NLSEstimator(Estimator):
         n_param = 5 + p if m_fixed is None else 4 + p
         x0 = np.zeros(n_param)
 
-        res = least_squares(
-            residuals,
-            x0,
-            loss=self.loss,
-            f_scale=self.f_scale,
-        )
+        if self.priors is None:
+            # Standard NLS using least_squares
+            res = least_squares(
+                compute_residuals,
+                x0,
+                loss=self.loss,
+                f_scale=self.f_scale,
+            )
+            success = res.success
+            nfev = res.nfev
+            cost = float(res.cost)
+            x_opt = res.x
+            method = "nls"
+        else:
+            # MAP estimation using minimize
+            def objective(x: np.ndarray) -> float:
+                residuals = compute_residuals(x)
+                sse = 0.5 * np.sum(residuals**2)
 
-        lam, gam, w1, h, m, beta = unpack(res.x)
+                lam, gam, w1, h, m, beta = unpack(x)
+                neg_log_prior = self.priors.neg_log_prob(
+                    lam=lam, gam=gam, w1=w1, h=h, m=m, beta=beta
+                )
+
+                return sse + neg_log_prior
+
+            res = minimize(
+                objective,
+                x0,
+                method="L-BFGS-B",
+                options={"maxiter": 1000, "disp": False},
+            )
+            success = res.success
+            nfev = res.nfev
+            cost = float(res.fun)
+            x_opt = res.x
+            method = "map"
+
+        lam, gam, w1, h, m, beta = unpack(x_opt)
 
         params = {
             "lambda": float(lam),
@@ -240,10 +308,11 @@ class NLSEstimator(Estimator):
         return EstimationResult(
             params=params,
             diagnostics={
-                "success": bool(res.success),
-                "nfev": int(res.nfev),
-                "cost": float(res.cost),
+                "success": bool(success),
+                "nfev": int(nfev),
+                "cost": float(cost),
                 "m_fixed": m_fixed,
+                "method": method,
             },
         )
 
@@ -255,7 +324,7 @@ class NLSEstimator(Estimator):
         uncertainty: bool = False,
         ci_prob: float = 0.95,
     ) -> NDArray | dict[str, NDArray]:
-        """Predict deposit balances using NLS point estimates.
+        """Predict deposit balances using NLS/MAP point estimates.
 
         Parameters
         ----------
@@ -264,10 +333,10 @@ class NLSEstimator(Estimator):
         result : EstimationResult
             Result from a previous call to `fit()`.
         uncertainty : bool, optional
-            If True, a warning is issued since NLS only provides point
+            If True, a warning is issued since NLS/MAP only provides point
             estimates. Default is False.
         ci_prob : float, optional
-            Ignored for NLS (no uncertainty estimation).
+            Ignored for NLS/MAP (no uncertainty estimation).
 
         Returns
         -------
