@@ -154,6 +154,7 @@ class MCMCConfig:
     likelihood: str = "studentt"
     device: DeviceConfig = field(default_factory=DeviceConfig)
     use_nls_init: bool = False  # Use NLS estimates as initial values
+    ar_errors: bool = False  # Use AR(1) autocorrelated errors
 
 
 def run_nls(data: CoreDepositData) -> EstimationResult:
@@ -190,6 +191,7 @@ def run_mcmc(
         num_chains=config.num_chains,
         likelihood=config.likelihood,
         init_params=init_params,
+        ar_errors=config.ar_errors,
     )
     return estimator.fit(data)
 
@@ -312,17 +314,22 @@ def print_convergence_diagnostics(idata: az.InferenceData) -> None:
         print(f"  {var}: {float(ess[var].values):.0f}")
 
 
-def print_credible_intervals(result: EstimationResult) -> None:
+def print_credible_intervals(result: EstimationResult, ar_errors: bool = False) -> None:
     """Print 95% credible intervals for all parameters."""
     print("\n" + "=" * 50)
     print("95% Credible Intervals")
     print("=" * 50)
 
-    for var in ["lambda", "gamma", "w1", "h", "m"]:
-        vals = np.array(result.params[var])
-        lo, hi = np.percentile(vals, [2.5, 97.5])
-        mean = vals.mean()
-        print(f"  {var}: {mean:.4f} [{lo:.4f}, {hi:.4f}]")
+    var_names = ["lambda", "gamma", "w1", "h", "m"]
+    if ar_errors:
+        var_names.append("rho")
+
+    for var in var_names:
+        if var in result.params:
+            vals = np.array(result.params[var])
+            lo, hi = np.percentile(vals, [2.5, 97.5])
+            mean = vals.mean()
+            print(f"  {var}: {mean:.4f} [{lo:.4f}, {hi:.4f}]")
 
 
 def print_median_survival(result: EstimationResult) -> None:
@@ -346,15 +353,16 @@ def main() -> None:
     """Run MCMC estimation example."""
     # Configuration
     config = MCMCConfig(
-        num_warmup=2000,
-        num_samples=4000,
+        num_warmup=3000,
+        num_samples=6000,
         num_chains=2,
         likelihood="studentt",
         device=DeviceConfig(
             platform="auto",  # "cpu", "gpu", or "auto"
             num_devices=2,   # Number of devices for parallel chains
         ),
-        use_nls_init=True,  # Use NLS estimates as MCMC initial values
+        use_nls_init=False,  # Use NLS estimates as MCMC initial values
+        ar_errors=False,  # Use AR(1) autocorrelated errors
     )
 
     # Setup device
@@ -413,7 +421,7 @@ def main() -> None:
     # Print statistics
     print_summary(idata)
     print_convergence_diagnostics(idata)
-    print_credible_intervals(result)
+    print_credible_intervals(result, ar_errors=config.ar_errors)
     print_median_survival(result)
 
     # Generate plots
