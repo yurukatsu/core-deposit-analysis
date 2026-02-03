@@ -10,7 +10,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
-from numpyro.infer import MCMC, NUTS, init_to_value
+from numpyro.infer import MCMC, NUTS
+from numpyro.infer.initialization import init_to_value
 
 from ..types import CoreDepositData, EstimationResult, NDArray
 from ..normalize import normalize
@@ -310,22 +311,16 @@ class MCMCEstimator(Estimator):
                     obs=V_obs[idx],
                 )
 
-        # Use init_to_value strategy if init_params provided
-        # This allows partial initialization (only specified params)
+        # Use custom init strategy if init_params provided
+        nuts_kwargs = {"target_accept_prob": self.target_accept}
         if self.init_params is not None:
             init_values = {
                 k: jnp.asarray(v, dtype=jnp.float64)
                 for k, v in self.init_params.items()
             }
-            init_strategy = init_to_value(values=init_values)
-        else:
-            init_strategy = None
+            nuts_kwargs["init_strategy"] = init_to_value(values=init_values)
 
-        kernel = NUTS(
-            model,
-            target_accept_prob=self.target_accept,
-            init_strategy=init_strategy,
-        )
+        kernel = NUTS(model, **nuts_kwargs)
         mcmc = MCMC(
             kernel,
             num_warmup=self.num_warmup,
