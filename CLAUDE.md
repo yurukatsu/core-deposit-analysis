@@ -15,7 +15,8 @@ uv sync
 # Install with CUDA support
 uv sync --extra cuda
 
-# Run example
+# Run examples
+uv run python examples/run_nls.py
 uv run python examples/run_mcmc.py
 
 # Lint
@@ -36,6 +37,7 @@ core-deposit-analysis/
 │   ├── model.md          # Mathematical model specification
 │   └── estimation.md     # Estimation methods (NLS, MCMC)
 ├── examples/
+│   ├── run_nls.py        # NLS and MAP estimation example
 │   ├── run_mcmc.py       # MCMC estimation with ArviZ visualization
 │   └── data/             # Sample datasets (boj.csv, covariate.csv)
 └── src/coredeposit/
@@ -50,10 +52,11 @@ core-deposit-analysis/
     │   ├── s1.py         # S1 survival functions (immediate_exit, geometric)
     │   └── balance.py    # V_model() - main balance prediction
     └── estimators/
-        ├── __init__.py   # Exports: Estimator, NLSEstimator, MCMCEstimator, CoreDepositPriors
+        ├── __init__.py   # Exports: Estimator, NLSEstimator, MCMCEstimator, priors
         ├── base.py       # Abstract Estimator base class
-        ├── priors.py     # CoreDepositPriors dataclass and default_priors()
-        ├── nls.py        # NLSEstimator (scipy least_squares)
+        ├── priors.py     # CoreDepositPriors dataclass for MCMC (NumPyro)
+        ├── map_priors.py # MAPPriors dataclass for MAP (scipy.stats)
+        ├── nls.py        # NLSEstimator (NLS and MAP via scipy)
         └── mcmc.py       # MCMCEstimator (NumPyro NUTS)
 ```
 
@@ -69,7 +72,9 @@ core-deposit-analysis/
   - `init_params`: Initialize from NLS estimates for better convergence
   - `ar_errors`: Model observation errors with AR(1) autocorrelation
 
-- [estimators/nls.py](src/coredeposit/estimators/nls.py) - Non-linear least squares via scipy. Supports optional fixed `m` parameter.
+- [estimators/nls.py](src/coredeposit/estimators/nls.py) - Non-linear least squares and MAP estimation via scipy. Supports optional fixed `m` parameter and `priors` for MAP.
+
+- [estimators/map_priors.py](src/coredeposit/estimators/map_priors.py) - `MAPPriors` dataclass for MAP estimation using scipy.stats distributions.
 
 - [estimators/priors.py](src/coredeposit/estimators/priors.py) - `CoreDepositPriors` dataclass with default weakly informative priors. Includes `rho_prior` for AR(1) coefficient.
 
