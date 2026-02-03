@@ -19,7 +19,13 @@ import numpyro
 import pandas as pd
 from numpy.typing import NDArray
 
-from coredeposit import CoreDepositData, MCMCEstimator, EstimationResult, compute_median_survival
+from coredeposit import (
+    CoreDepositData,
+    MCMCEstimator,
+    NLSEstimator,
+    EstimationResult,
+    compute_median_survival,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -146,14 +152,33 @@ class MCMCConfig:
     num_chains: int = 2
     likelihood: str = "studentt"
     device: DeviceConfig = field(default_factory=DeviceConfig)
+    use_nls_init: bool = False  # Use NLS estimates as initial values
 
 
-def run_mcmc(data: CoreDepositData, config: MCMCConfig) -> EstimationResult:
+def run_nls(data: CoreDepositData) -> EstimationResult:
+    """Run NLS estimation for initial values.
+
+    Args:
+        data: Core deposit data.
+
+    Returns:
+        Estimation result with point estimates.
+    """
+    estimator = NLSEstimator(loss="soft_l1")
+    return estimator.fit(data)
+
+
+def run_mcmc(
+    data: CoreDepositData,
+    config: MCMCConfig,
+    init_params: dict[str, float] | None = None,
+) -> EstimationResult:
     """Run MCMC estimation.
 
     Args:
         data: Core deposit data.
         config: MCMC configuration.
+        init_params: Optional initial parameter values.
 
     Returns:
         Estimation result with posterior samples.
@@ -163,6 +188,7 @@ def run_mcmc(data: CoreDepositData, config: MCMCConfig) -> EstimationResult:
         num_samples=config.num_samples,
         num_chains=config.num_chains,
         likelihood=config.likelihood,
+        init_params=init_params,
     )
     return estimator.fit(data)
 
@@ -324,9 +350,10 @@ def main() -> None:
         num_chains=2,
         likelihood="studentt",
         device=DeviceConfig(
-            platform="cpu",  # "cpu", "gpu", or "auto"
+            platform="auto",  # "cpu", "gpu", or "auto"
             num_devices=2,   # Number of devices for parallel chains
         ),
+        use_nls_init=True,  # Use NLS estimates as MCMC initial values
     )
 
     # Setup device
@@ -351,9 +378,25 @@ def main() -> None:
 
     data = create_core_deposit_data(df, z=z)
 
+    # Run NLS for initial values if requested
+    init_params = None
+    if config.use_nls_init:
+        print("\nRunning NLS for initial values...")
+        nls_result = run_nls(data)
+        init_params = {
+            "lambda": nls_result.params["lambda"],
+            "gamma": nls_result.params["gamma"],
+            "w1": nls_result.params["w1"],
+            "h": nls_result.params["h"],
+            "m": nls_result.params["m"],
+        }
+        print("  NLS estimates:")
+        for k, v in init_params.items():
+            print(f"    {k}: {v:.4f}")
+
     # Run MCMC
     print("\nRunning MCMC estimation...")
-    result = run_mcmc(data, config)
+    result = run_mcmc(data, config, init_params=init_params)
 
     # Create estimator for prediction
     estimator = MCMCEstimator(
