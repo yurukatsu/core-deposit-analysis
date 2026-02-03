@@ -61,6 +61,10 @@ class MCMCEstimator(Estimator):
         dictionary with keys matching parameter names ('lambda', 'gamma',
         'w1', 'h', 'm', and optionally 'beta'). Useful for initializing
         from NLS estimates to improve convergence. Default is None.
+    ar_errors : bool, optional
+        If True, model observation errors with AR(1) autocorrelation.
+        This accounts for temporal correlation in prediction errors.
+        Default is False.
 
     Attributes
     ----------
@@ -80,6 +84,8 @@ class MCMCEstimator(Estimator):
         Prior distributions.
     init_params : dict or None
         Initial parameter values.
+    ar_errors : bool
+        Whether to use AR(1) error model.
 
     Examples
     --------
@@ -116,6 +122,7 @@ class MCMCEstimator(Estimator):
         likelihood: str = "studentt",
         priors: CoreDepositPriors | None = None,
         init_params: dict[str, float] | None = None,
+        ar_errors: bool = False,
     ):
         """Initialize the MCMC estimator.
 
@@ -139,6 +146,8 @@ class MCMCEstimator(Estimator):
             Initial parameter values for MCMC chains. Keys should match
             parameter names ('lambda', 'gamma', 'w1', 'h', 'm').
             Useful for initializing from NLS estimates. Default is None.
+        ar_errors : bool, optional
+            If True, model errors with AR(1) autocorrelation. Default is False.
         """
         self.num_warmup = num_warmup
         self.num_samples = num_samples
@@ -148,6 +157,7 @@ class MCMCEstimator(Estimator):
         self.likelihood = likelihood
         self.priors = priors
         self.init_params = init_params
+        self.ar_errors = ar_errors
 
     def fit(self, data: CoreDepositData) -> EstimationResult:
         """Estimate model parameters using Bayesian MCMC.
@@ -182,6 +192,7 @@ class MCMCEstimator(Estimator):
                 - 'm': Initial deposit age samples
                 - 'sigma': Observation noise std samples
                 - 'nu': Student-t degrees of freedom samples (if likelihood='studentt')
+                - 'rho': AR(1) autocorrelation coefficient (if ar_errors=True)
                 - 'beta': Covariate coefficient samples (if z provided)
 
             diagnostics : dict
@@ -258,7 +269,34 @@ class MCMCEstimator(Estimator):
 
             idx = jnp.arange(1, T + 1)
 
-            if self.likelihood == "normal":
+            if self.ar_errors:
+                # AR(1) error model: epsilon[t] = rho * epsilon[t-1] + eta[t]
+                rho = numpyro.sample("rho", priors.rho_prior)
+
+                # Compute residuals
+                residuals = V_obs - Vhat
+
+                # Conditional likelihood for AR(1) process
+                # For t=1: marginal variance is sigma^2 / (1 - rho^2)
+                # For t>1: obs[t] ~ N(Vhat[t] + rho*(obs[t-1] - Vhat[t-1]), sigma)
+                sigma_marginal = sigma / jnp.sqrt(1 - rho**2 + 1e-8)
+
+                # First observation (marginal distribution)
+                numpyro.sample(
+                    "obs_0",
+                    priors.normal_likelihood(Vhat[1], sigma_marginal),
+                    obs=V_obs[1],
+                )
+
+                # Subsequent observations (conditional distribution)
+                if T > 1:
+                    conditional_mean = Vhat[2:] + rho * residuals[1:-1]
+                    numpyro.sample(
+                        "obs",
+                        priors.normal_likelihood(conditional_mean, sigma).to_event(1),
+                        obs=V_obs[2:],
+                    )
+            elif self.likelihood == "normal":
                 numpyro.sample(
                     "obs",
                     priors.normal_likelihood(Vhat[idx], sigma),

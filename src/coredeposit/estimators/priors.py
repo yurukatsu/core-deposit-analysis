@@ -42,6 +42,9 @@ class CoreDepositPriors:
     nu_prior : numpyro.distributions.Distribution
         Prior for Student-t degrees of freedom minus 2 (positive).
         Default: Exponential(1.0). Note: 2.0 is added in the model.
+    rho_prior : numpyro.distributions.Distribution
+        Prior for AR(1) autocorrelation coefficient (-1 < rho < 1).
+        Default: Uniform(-1, 1) for stationarity.
     beta_prior : numpyro.distributions.Distribution or None
         Prior for covariate coefficients. None for no-covariate model.
         Default: Normal(0.0, 0.3) for each coefficient.
@@ -56,6 +59,7 @@ class CoreDepositPriors:
     ...     m_prior=dist.LogNormal(2.5, 0.4),
     ...     sigma_prior=dist.HalfNormal(0.05),
     ...     nu_prior=dist.Exponential(1.0),
+    ...     rho_prior=dist.Uniform(-1.0, 1.0),
     ... )
     """
 
@@ -66,6 +70,7 @@ class CoreDepositPriors:
     m_prior: dist.Distribution
     sigma_prior: dist.Distribution
     nu_prior: dist.Distribution
+    rho_prior: dist.Distribution
     beta_prior: dist.Distribution | None = None
 
     @staticmethod
@@ -144,6 +149,8 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
             Observation noise, concentrated near 0
         - nu_prior: Exponential(1.0)
             Student-t df (before adding 2), mean 1.0
+        - rho_prior: Uniform(-1, 1)
+            AR(1) autocorrelation coefficient for stationary errors
         - beta_prior: Normal(0, 0.3) for each of p coefficients, or None
 
     Examples
@@ -171,4 +178,5 @@ def default_priors(p: int = 0) -> CoreDepositPriors:
         m_prior=dist.LogNormal(2.5, 0.4),
         sigma_prior=dist.HalfNormal(0.05),
         nu_prior=dist.Exponential(1.0),
+        rho_prior=dist.Uniform(-1.0, 1.0),
     )
