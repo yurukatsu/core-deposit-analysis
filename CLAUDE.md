@@ -44,9 +44,10 @@ core-deposit-analysis/
     ├── normalize.py      # Data normalization for numerical stability
     ├── metrics.py        # Derived metrics (compute_median_survival)
     ├── model/
-    │   ├── __init__.py   # Exports: V_model, weibull_hazard, S2_matrix, S2_init_vector
+    │   ├── __init__.py   # Exports: V_model, weibull_hazard, S2_*, S1_*
     │   ├── hazard.py     # weibull_hazard()
     │   ├── survival.py   # S2_matrix(), S2_init_vector() - vectorized
+    │   ├── s1.py         # S1 survival functions (immediate_exit, geometric)
     │   └── balance.py    # V_model() - main balance prediction
     └── estimators/
         ├── __init__.py   # Exports: Estimator, NLSEstimator, MCMCEstimator, CoreDepositPriors
@@ -60,7 +61,9 @@ core-deposit-analysis/
 
 - [types.py](src/coredeposit/types.py) - `CoreDepositData` holds observed balances (`V_obs`), inflows (`inflow`), exogenous variables (`z`), initial balance (`V0`).
 
-- [model/balance.py](src/coredeposit/model/balance.py) - `V_model()` computes predicted deposit balances. Weibull hazard parameters: `lam` (scale), `gam` (shape). Model parameters: `w1` (transactional proportion), `h` (first-month exit rate), `m` (initial balance average age).
+- [model/balance.py](src/coredeposit/model/balance.py) - `V_model()` computes predicted deposit balances. Weibull hazard parameters: `lam` (scale), `gam` (shape). Model parameters: `w1` (transactional proportion), `h` (first-month exit rate), `m` (initial balance average age). Accepts `s1_term_fn` for custom S1 models.
+
+- [model/s1.py](src/coredeposit/model/s1.py) - S1 (transactional deposit) survival functions. Default: immediate exit. Alternative: geometric. Customizable via `s1_term_fn` parameter.
 
 - [estimators/mcmc.py](src/coredeposit/estimators/mcmc.py) - Bayesian estimation via NumPyro NUTS. Supports both covariate and no-covariate models. Uses Student-t likelihood by default for robustness. Key options:
   - `init_params`: Initialize from NLS estimates for better convergence
