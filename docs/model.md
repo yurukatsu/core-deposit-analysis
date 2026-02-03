@@ -145,27 +145,44 @@ Available S1 functions in `coredeposit.model.s1`:
 
 Sticky deposits follow a continuous hazard model with optional time-varying covariates.
 
-#### Baseline Hazard
+#### Continuous-Time Derivation
 
-The baseline hazard $h_0(s \mid \theta)$ is a function of **survival duration** $s$.
-
-#### Covariate Effect
-
-Let $z(u)$ be a vector of exogenous covariates at **calendar time** $u$. The hazard at calendar time $u$ for a deposit received at time $i$ is:
+The survival function $S_2(t \mid i, z)$ for a deposit received at time $i$ satisfies the following ordinary differential equation:
 
 $$
-h(u \mid i, z) = h_0(u - (i-1) \mid \theta) \exp(\beta^\top z(u))
+\frac{d}{dt} S_2(t \mid i, z) = -h(t \mid i, z) \, S_2(t \mid i, z), \quad S_2(i-1 \mid i, z) = 1
+$$
+
+where $h(t \mid i, z)$ is the instantaneous hazard rate at calendar time $t$.
+
+#### Proportional Hazards with Time-Varying Covariates
+
+We decompose the hazard into two components:
+
+1. **Baseline hazard** $h_0(s \mid \theta)$: depends on survival duration $s = t - (i-1)$
+2. **Covariate effect** $\exp(\beta^\top z(t))$: depends on calendar time $t$
+
+This gives the proportional hazards specification:
+
+$$
+h(t \mid i, z) = h_0(t - (i-1) \mid \theta) \exp(\beta^\top z(t))
 $$
 
 #### Survival Function
 
-For an inflow at time $i$, the survival function at time $t$ is:
+Solving the ODE yields:
+
+$$
+S_2(t \mid i, z) = \exp\left( -\int_{i-1}^{t} h(u \mid i, z) \, du \right)
+$$
+
+Substituting the proportional hazards form:
 
 $$
 S_2(t \mid i, z) = \exp\left( -\int_{i-1}^{t} h_0(u - (i-1) \mid \theta) \exp(\beta^\top z(u)) \, du \right)
 $$
 
-In the absence of covariates ($z \equiv 0$ or $\beta = 0$):
+In the absence of covariates ($z \equiv 0$ or $\beta = 0$), substituting $s = u - (i-1)$:
 
 $$
 S_2(t \mid i) = \exp\left( -\int_{0}^{t-i+1} h_0(s \mid \theta) \, ds \right)

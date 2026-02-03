@@ -1,12 +1,13 @@
 # Estimation Methods
 
-This document describes the two estimation methods available in the coredeposit library: Non-linear Least Squares (NLS) and Bayesian MCMC.
+This document describes the estimation methods available in the coredeposit library: Non-linear Least Squares (NLS), MAP (Maximum A Posteriori), and Bayesian MCMC.
 
 ## 1. Overview
 
 | Method | Class | Purpose | Output |
 |--------|-------|---------|--------|
 | NLS | `NLSEstimator` | Fast point estimation | Parameter point estimates |
+| MAP | `NLSEstimator(priors=...)` | Point estimation with priors | Parameter point estimates |
 | MCMC | `MCMCEstimator` | Bayesian inference with uncertainty | Posterior samples |
 
 Both estimators implement the same interface:
@@ -74,9 +75,81 @@ print(result.params['gamma'])   # float
 
 ---
 
-## 3. Bayesian MCMC
+## 3. MAP Estimation
 
-### 3.1 Statistical Model
+MAP (Maximum A Posteriori) estimation extends NLS by incorporating prior distributions. It finds the mode of the posterior distribution.
+
+### 3.1 Objective Function
+
+MAP minimizes the negative log posterior:
+
+$$
+\min_{\Theta} \left[ \frac{1}{2} \sum_{t=1}^{T} (V_{\text{obs}}(t) - V_{\text{model}}(t \mid \Theta))^2 - \log p(\Theta) \right]
+$$
+
+where $p(\Theta)$ is the prior distribution.
+
+### 3.2 Default Priors
+
+MAP uses the same default priors as MCMC (via `MAPPriors`):
+
+| Parameter | Prior | Interpretation |
+|-----------|-------|----------------|
+| $\lambda$ | $\text{LogNormal}(-3.0, 0.6)$ | Median ~0.05 |
+| $\gamma$ | $\text{LogNormal}(0.0, 0.35)$ | Median ~1.0 |
+| $w_1$ | $\text{Beta}(2.0, 6.0)$ | Mean ~0.25 |
+| $h$ | $\text{Beta}(2.0, 6.0)$ | Mean ~0.25 |
+| $m$ | $\text{LogNormal}(2.5, 0.4)$ | Median ~12 months |
+| $\beta$ | $\mathcal{N}(0, 0.3)$ | Per covariate |
+
+### 3.3 Usage
+
+```python
+from coredeposit import NLSEstimator, CoreDepositData
+from coredeposit.estimators import default_map_priors
+
+data = CoreDepositData(V_obs=..., inflow=..., V0=...)
+
+# Create MAP priors
+priors = default_map_priors()
+
+# MAP estimation
+estimator = NLSEstimator(priors=priors)
+result = estimator.fit(data)
+
+# Check method used
+print(result.diagnostics['method'])  # 'map'
+
+# Access point estimates
+print(result.params['lambda'])
+print(result.params['gamma'])
+```
+
+### 3.4 Custom Priors
+
+```python
+from scipy import stats
+from coredeposit.estimators import MAPPriors
+import numpy as np
+
+# Create custom priors using scipy.stats
+priors = MAPPriors(
+    lambda_dist=stats.lognorm(s=0.5, scale=np.exp(-2.5)),  # tighter prior
+    gamma_dist=stats.lognorm(s=0.3, scale=1.0),
+    w1_dist=stats.beta(3.0, 7.0),  # favor lower w1
+    h_dist=stats.beta(5.0, 5.0),   # centered at 0.5
+    m_dist=stats.lognorm(s=0.3, scale=np.exp(2.0)),
+)
+
+estimator = NLSEstimator(priors=priors)
+result = estimator.fit(data)
+```
+
+---
+
+## 4. Bayesian MCMC
+
+### 4.1 Statistical Model
 
 The observation model is:
 
@@ -86,7 +159,7 @@ $$
 
 where $\epsilon_t$ follows either a Normal or Student-t distribution.
 
-### 3.2 Likelihood Functions
+### 4.2 Likelihood Functions
 
 #### Normal Likelihood
 
@@ -102,7 +175,7 @@ $$
 
 The Student-t distribution provides robustness against outliers due to heavier tails.
 
-### 3.3 Prior Distributions
+### 4.3 Prior Distributions
 
 Default weakly informative priors:
 
@@ -118,7 +191,7 @@ Default weakly informative priors:
 | $\rho$ | $\text{Uniform}(-1, 1)$ | AR(1) coefficient |
 | $\beta$ | $\mathcal{N}(0, 0.3)$ | Per covariate |
 
-### 3.4 AR(1) Error Model
+### 4.4 AR(1) Error Model
 
 When `ar_errors=True`, the observation errors follow an AR(1) process:
 
@@ -138,7 +211,7 @@ $$
 V_{\text{obs}}(t) \sim \mathcal{N}\left(V_{\text{model}}(t) + \rho (V_{\text{obs}}(t-1) - V_{\text{model}}(t-1)), \sigma^2\right)
 $$
 
-### 3.5 Initialization from NLS
+### 4.5 Initialization from NLS/MAP
 
 MCMC convergence can be improved by initializing from NLS estimates:
 
@@ -162,7 +235,7 @@ mcmc = MCMCEstimator(init_params=init_params)
 result = mcmc.fit(data)
 ```
 
-### 3.6 Usage
+### 4.6 Usage
 
 ```python
 from coredeposit import MCMCEstimator, CoreDepositData
@@ -191,11 +264,11 @@ print(f"95% CI: [{lo:.4f}, {hi:.4f}]")
 
 ---
 
-## 4. Predictions
+## 5. Predictions
 
 Both estimators support prediction with the same interface:
 
-### 4.1 NLS Prediction
+### 5.1 NLS/MAP Prediction
 
 Returns point predictions:
 
@@ -203,7 +276,7 @@ Returns point predictions:
 V_pred = estimator.predict(data, result)  # array of shape (T+1,)
 ```
 
-### 4.2 MCMC Prediction
+### 5.2 MCMC Prediction
 
 Returns posterior predictive distribution:
 
@@ -221,17 +294,18 @@ print(pred['upper'])   # 97.5th percentile
 
 ---
 
-## 5. Diagnostics
+## 6. Diagnostics
 
-### 5.1 NLS Diagnostics
+### 6.1 NLS/MAP Diagnostics
 
 ```python
 result.diagnostics['success']  # Optimization converged
 result.diagnostics['cost']     # Final cost value
 result.diagnostics['nfev']     # Number of function evaluations
+result.diagnostics['method']   # 'nls' or 'map'
 ```
 
-### 5.2 MCMC Diagnostics
+### 6.2 MCMC Diagnostics
 
 ```python
 import arviz as az
@@ -255,9 +329,9 @@ Key convergence metrics:
 
 ---
 
-## 6. Derived Metrics
+## 7. Derived Metrics
 
-### 6.1 Median Survival Time
+### 7.1 Median Survival Time
 
 The median survival time (half-life) for sticky deposits:
 
@@ -279,18 +353,19 @@ print(f"95% CI: [{t50['lower']:.1f}, {t50['upper']:.1f}]")
 
 ---
 
-## 7. Method Comparison
+## 8. Method Comparison
 
-| Aspect | NLS | MCMC |
-|--------|-----|------|
-| Speed | Fast | Slow |
-| Uncertainty | No | Yes |
-| Outlier handling | Robust losses | Student-t likelihood |
-| Autocorrelation | No | AR(1) errors |
-| Prior information | No | Yes |
-| Convergence | Local minimum | Global (with sufficient sampling) |
+| Aspect | NLS | MAP | MCMC |
+|--------|-----|-----|------|
+| Speed | Fast | Fast | Slow |
+| Uncertainty | No | No | Yes |
+| Outlier handling | Robust losses | No | Student-t likelihood |
+| Autocorrelation | No | No | AR(1) errors |
+| Prior information | No | Yes | Yes |
+| Convergence | Local minimum | Local minimum | Global (with sufficient sampling) |
 
 **Recommended workflow**:
 1. Start with NLS for quick exploration
-2. Use NLS result to initialize MCMC
-3. Run MCMC for final inference with uncertainty quantification
+2. Use MAP if you want to incorporate prior knowledge
+3. Use NLS/MAP result to initialize MCMC
+4. Run MCMC for final inference with uncertainty quantification
