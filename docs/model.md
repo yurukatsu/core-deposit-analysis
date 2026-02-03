@@ -67,10 +67,62 @@ $$
 w_1(0) = 0, \quad w_2(0) = 1
 $$
 
-**Assumption 2**: Type proportions are constant over time:
+**Assumption 2** (Constant w1): Type proportions are constant over time:
 $$
 w_1(i) = w_1, \quad w_2(i) = 1 - w_1 \quad \forall i \geq 1
 $$
+
+### 3.3 Time-Varying w1 (Extension)
+
+The constant w1 assumption can be relaxed to allow time-varying transactional proportions. This is useful when inflow composition varies seasonally or with market conditions.
+
+#### Logistic Specification
+
+The transactional proportion at time $i$ is modeled via logistic regression:
+
+$$
+w_1(i) = \sigma(a + b^\top x(i))
+$$
+
+where:
+- $\sigma(z) = 1 / (1 + e^{-z})$ is the sigmoid function
+- $a \in \mathbb{R}$ is the intercept (baseline w1 on logit scale)
+- $b \in \mathbb{R}^q$ are coefficients for $q$ features
+- $x(i) \in \mathbb{R}^q$ are features at time $i$
+
+#### Common Features
+
+| Feature | Formula | Interpretation |
+|---------|---------|----------------|
+| MA deviation | $\log(I(i) / \text{MA}(I))$ | Positive when inflow exceeds trend |
+| Seasonal dummies | Binary indicators for months 1-11 | Monthly seasonality |
+
+#### Parameter Interpretation
+
+- When $a = 0$ and $b = 0$: $w_1(i) = 0.5$ (constant)
+- $a < 0$: baseline w1 < 0.5 (more sticky deposits)
+- $b_j > 0$: positive feature increases transactional proportion
+
+#### Implementation
+
+```python
+from coredeposit import CoreDepositData
+from coredeposit.model.w1 import compute_w1_features_ma_deviation
+
+# Compute features
+w1_features = compute_w1_features_ma_deviation(inflow, window=12)
+
+# Include in data
+data = CoreDepositData(
+    V_obs=V_obs, inflow=inflow, V0=V0,
+    w1_features=w1_features.reshape(-1, 1)
+)
+```
+
+When `w1_features` is provided, estimators return:
+- `w1_a`: intercept parameter
+- `w1_b`: coefficient vector (shape `(q,)` for NLS, `(n_samples, q)` for MCMC)
+- `w1`: mean w1 value (NLS only, for convenience)
 
 ---
 
@@ -247,11 +299,14 @@ $$
 |-----------|--------|-------------|
 | $\lambda$ | $(0, \infty)$ | Weibull scale parameter |
 | $\gamma$ | $(0, \infty)$ | Weibull shape parameter |
-| $w_1$ | $[0, 1]$ | Proportion of transactional deposits in inflow |
+| $w_1$ | $[0, 1]$ | Proportion of transactional deposits in inflow (constant model) |
+| $a$ | $\mathbb{R}$ | w1 logistic intercept (time-varying model) |
+| $b$ | $\mathbb{R}^q$ | w1 logistic coefficients (time-varying model) |
 | $h$ | $[0, 1]$ | First-month exit rate for transactional deposits |
 | $m$ | $(0, \infty)$ | Average age of initial balance (months) |
-| $\beta$ | $\mathbb{R}^p$ | Covariate coefficients (optional) |
+| $\beta$ | $\mathbb{R}^p$ | S2 hazard covariate coefficients (optional) |
 | $\sigma$ | $(0, \infty)$ | Observation noise (MCMC only) |
 | $\nu$ | $(0, \infty)$ | Student-t degrees of freedom (MCMC only) |
+| $\rho$ | $(-1, 1)$ | AR(1) autocorrelation coefficient (MCMC with ar_errors) |
 
 ---

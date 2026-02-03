@@ -51,6 +51,8 @@ To enforce parameter constraints during optimization:
 | $\gamma$ | $(0, \infty)$ | $\gamma = \exp(\tilde{\gamma})$ |
 | $m$ | $(0, \infty)$ | $m = \exp(\tilde{m})$ |
 | $w_1$ | $(0, 1)$ | $w_1 = \sigma(\tilde{w}_1)$ (sigmoid) |
+| $a$ (w1 intercept) | $\mathbb{R}$ | No transformation |
+| $b$ (w1 coefficients) | $\mathbb{R}^q$ | No transformation |
 | $h$ | $(0, 1)$ | $h = \sigma(\tilde{h})$ (sigmoid) |
 | $\beta$ | $\mathbb{R}^p$ | No transformation |
 
@@ -189,7 +191,9 @@ Default weakly informative priors:
 | $\sigma$ | $\text{HalfNormal}(0.05)$ | Near zero |
 | $\nu$ | $\text{Exponential}(1.0) + 2$ | Heavy tails |
 | $\rho$ | $\text{Uniform}(-1, 1)$ | AR(1) coefficient |
-| $\beta$ | $\mathcal{N}(0, 0.3)$ | Per covariate |
+| $\beta$ | $\mathcal{N}(0, 0.3)$ | Per S2 covariate |
+| $a$ (w1 intercept) | $\mathcal{N}(-1, 1)$ | Baseline w1 ~0.27 |
+| $b$ (w1 coefficients) | $\mathcal{N}(0, 0.5)$ | Per w1 feature |
 
 ### 4.4 AR(1) Error Model
 
@@ -211,7 +215,34 @@ $$
 V_{\text{obs}}(t) \sim \mathcal{N}\left(V_{\text{model}}(t) + \rho (V_{\text{obs}}(t-1) - V_{\text{model}}(t-1)), \sigma^2\right)
 $$
 
-### 4.5 Initialization from NLS/MAP
+### 4.5 Time-Varying w1
+
+When `w1_features` is provided in `CoreDepositData`, both NLS and MCMC estimate time-varying transactional proportions:
+
+```python
+from coredeposit import CoreDepositData, MCMCEstimator
+from coredeposit.model.w1 import compute_w1_features_ma_deviation
+
+# Compute features
+w1_features = compute_w1_features_ma_deviation(inflow, window=12)
+
+data = CoreDepositData(
+    V_obs=V_obs, inflow=inflow, V0=V0,
+    w1_features=w1_features.reshape(-1, 1)  # Shape: (T+1, q)
+)
+
+# Fit model
+mcmc = MCMCEstimator(num_warmup=1000, num_samples=2000)
+result = mcmc.fit(data)
+
+# Access w1 parameters
+print(result.params['w1_a'])  # Intercept samples
+print(result.params['w1_b'])  # Coefficient samples (shape: n_samples x q)
+```
+
+The model is: $w_1(t) = \sigma(a + b^\top x(t))$
+
+### 4.6 Initialization from NLS/MAP
 
 MCMC convergence can be improved by initializing from NLS estimates:
 
@@ -235,7 +266,7 @@ mcmc = MCMCEstimator(init_params=init_params)
 result = mcmc.fit(data)
 ```
 
-### 4.6 Usage
+### 4.7 Usage
 
 ```python
 from coredeposit import MCMCEstimator, CoreDepositData

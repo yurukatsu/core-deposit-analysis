@@ -75,6 +75,8 @@ The model estimates the following parameters:
 | `h` | First-month exit rate for transactional deposits (0-1) |
 | `m` | Average age of initial balance in months |
 | `beta` | Covariate coefficients (if covariates provided) |
+| `w1_a` | w1 logistic intercept (if w1_features provided) |
+| `w1_b` | w1 logistic coefficients (if w1_features provided) |
 | `sigma` | Observation noise std (MCMC only) |
 | `nu` | Student-t degrees of freedom (MCMC with studentt likelihood) |
 | `rho` | AR(1) autocorrelation coefficient (MCMC with ar_errors=True) |
@@ -172,6 +174,37 @@ data = CoreDepositData(
 result = mcmc.fit(data)
 print(result.params["beta"])  # Covariate coefficients
 ```
+
+### Time-Varying Transactional Proportion (w1)
+
+Model the transactional proportion as a function of features:
+
+```python
+from coredeposit.model.w1 import compute_w1_features_ma_deviation
+
+# Compute features (e.g., deviation from moving average)
+w1_features = compute_w1_features_ma_deviation(df["inflow"].values, window=12)
+
+data = CoreDepositData(
+    V_obs=df["volume"].values,
+    inflow=df["inflow"].values,
+    V0=df["volume"].values[0],
+    w1_features=w1_features.reshape(-1, 1),  # Shape: (T+1, q)
+)
+
+# Fit with time-varying w1
+result = mcmc.fit(data)
+print(result.params["w1_a"])  # Logistic intercept
+print(result.params["w1_b"])  # Feature coefficients
+print(result.params["w1"])    # Mean w1 (NLS only)
+```
+
+When `w1_features` is provided, w1 is modeled as:
+$$w_1(t) = \sigma(a + b^\top x(t))$$
+
+where $\sigma$ is the sigmoid function. Available feature helpers:
+- `compute_w1_features_ma_deviation(inflow, window)`: Log deviation from moving average
+- `compute_w1_features_seasonal(T, start_month)`: Monthly dummy variables
 
 ### Derived Metrics
 
